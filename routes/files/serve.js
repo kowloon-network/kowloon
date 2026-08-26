@@ -19,9 +19,12 @@ import { getStorageAdapter } from '#methods/files/index.js';
 import { verifyFileSig } from '#methods/files/signedUrl.js';
 import { getViewerContext } from '#methods/visibility/context.js';
 import getSettings from '#methods/settings/get.js';
-import { Post, Reply, User, Group, Page, Bookmark, Circle } from '#schema';
+import { Post, Reply, User, Group, Page, Bookmark, Circle, FeedItems } from '#schema';
 import isLocalDomain from '#methods/parse/isLocalDomain.js';
 import { hydrateRemoteFile } from '#methods/files/hydrateRemoteFile.js';
+import verifyHttpSignature from '#methods/federation/verifyHttpSignature.js';
+import { domainHasAudienceMember } from '#methods/visibility/domainHasAudienceMember.js';
+import { canView } from '#methods/feed/visibility.js';
 
 const PARENT_MODELS = { Post, Reply, User, Group, Page, Bookmark, Circle };
 
@@ -81,6 +84,23 @@ async function canAccess(to, file, viewerId) {
   return ctx.circleIds.has(visibility) || ctx.groupIds.has(visibility);
 }
 
+// Local-viewer gating for a file whose parent is a REMOTE (federated) post —
+// a different mechanism than canAccess() above. Kowloon never discloses a
+// restricted post's real circle id across servers (FeedItems.to is only ever
+// the coarse public/server/audience enum), so there's no circle id to check
+// membership against here. What we actually receive for restricted content is
+// a set of per-*local*-user grants (FeedFanOut) computed at pull time — the
+// same mechanism the feed itself already uses for federated audience posts.
+// Reuses canView() (methods/feed/visibility.js) directly rather than
+// re-deriving the same public/server/audience logic a second time.
+async function canAccessRemoteParent(parentId, viewerId) {
+  // canView() reads feedCacheItem.id (for the FeedFanOut lookup) in
+  // addition to `to`/`actorId` — must select it too.
+  const feedItem = await FeedItems.findOne({ id: parentId }).select('id to actorId').lean();
+  if (!feedItem) return false;
+  return canView(feedItem, viewerId);
+}
+
 export default async function serve(req, res) {
   const fileId = req.params.id;
   const sizeParam = req.query.size ? String(req.query.size) : null;
@@ -91,20 +111,59 @@ export default async function serve(req, res) {
     const file = await File.findOne({ id: fileId, deletedAt: null }).lean();
     if (!file) return res.status(404).json({ error: 'File not found' });
 
-    const parentTo = file.parentObject ? await getParentTo(file.parentObject) : null;
+    // A parent living on another domain is a cached remote-origin file (see
+    // methods/files/hydrateRemoteFile.js) — its local viewer gating goes
+    // through canAccessRemoteParent() instead of the circle/group-based
+    // canAccess() below, since we never have a real circle id for it (see
+    // that function's comment). getParentTo() would just miss for these
+    // (no local Post/Reply/etc record exists for a remote id) — skip it.
+    const parsedParent = file.parentObject ? kowloonId(file.parentObject) : null;
+    const parentIsRemote = !!(parsedParent?.domain && !isLocalDomain(parsedParent.domain));
+
+    const parentTo = !parentIsRemote && file.parentObject ? await getParentTo(file.parentObject) : null;
     const effectiveTo = parentTo ?? file.to ?? '@public';
 
     // A valid app-issued signature grants access to this one file (the API only
-    // mints them for viewers it already authorized). Otherwise fall back to the
-    // Bearer/?token JWT + parent-visibility check.
+    // mints them for viewers it already authorized). Otherwise: a signed S2S
+    // request from a peer Kowloon server is authorized by DOMAIN, not by local
+    // viewer identity — does the audience this file is restricted to have any
+    // member on the signing server's domain? (See issue #57 — this is what
+    // lets a peer legitimately cache our restricted media instead of only
+    // ever being able to fetch @public bytes.) Only meaningful for content WE
+    // originate (real circle data); doesn't apply to a file we ourselves only
+    // have a cached copy of. Otherwise fall back to the Bearer/?token JWT +
+    // parent-visibility check.
     if (!verifyFileSig(fileId, req.query.exp, req.query.sig)) {
-      const token = extractToken(req);
-      const viewerId = await resolveViewer(token);
-      const allowed = await canAccess(effectiveTo, file, viewerId);
+      let allowed = false;
+      let viewerId = null;
+      let identified = false; // did we identify SOME requester (local viewer or a validly-signed peer), even if not authorized — governs 401 vs 403 below
+
+      if (!parentIsRemote && req.get('Signature')) {
+        const sig = await verifyHttpSignature(req);
+        // sig.domain is derived from the request's own Host header — i.e.
+        // OUR domain, since we're the receiver, not the signer's identity.
+        // The signer's actual domain is embedded in the (now cryptographically
+        // validated) keyId URL, same as routes/inbox/post.js's domain-
+        // consistency check already relies on.
+        if (sig.ok) {
+          identified = true;
+          const signerDomain = kowloonId(sig.keyId)?.domain;
+          allowed = await domainHasAudienceMember(effectiveTo, signerDomain);
+        }
+      }
 
       if (!allowed) {
-        return res.status(viewerId ? 403 : 401).json({
-          error: viewerId ? 'Access denied' : 'Authentication required',
+        const token = extractToken(req);
+        viewerId = await resolveViewer(token);
+        if (viewerId) identified = true;
+        allowed = parentIsRemote
+          ? await canAccessRemoteParent(file.parentObject, viewerId)
+          : await canAccess(effectiveTo, file, viewerId);
+      }
+
+      if (!allowed) {
+        return res.status(identified ? 403 : 401).json({
+          error: identified ? 'Access denied' : 'Authentication required',
         });
       }
     }
@@ -120,10 +179,12 @@ export default async function serve(req, res) {
 
     // Remote-cached shadow File with no bytes yet (cache miss, or hydration
     // hasn't run for this fileId) — self-heal by fetching+caching inline
-    // instead of 404ing. Public remote files only for now (see issue #57);
-    // still a no-op 404 for restricted remote files, same as before. Origin
-    // is derived from the id itself (not a stored field — reliable and
-    // matches how hydrateRemoteFile.js determines it internally).
+    // instead of 404ing. hydrateRemoteFile signs its outbound request, so
+    // this works for restricted remote files too (the origin authorizes us
+    // by domain — see the S2S branch above and issue #57); it degrades to a
+    // no-op 404 only if the origin actually denies us. Origin is derived
+    // from the id itself (not a stored field — reliable and matches how
+    // hydrateRemoteFile.js determines it internally).
     if (!storageKey) {
       const parsedId = kowloonId(fileId);
       if (parsedId?.domain && !isLocalDomain(parsedId.domain)) {
@@ -145,7 +206,12 @@ export default async function serve(req, res) {
       ? 'image/webp'
       : file.mediaType || 'application/octet-stream';
 
-    const cacheControl = normalizeVisibility(effectiveTo) === '@public'
+    // effectiveTo/file.to isn't a reliable public/private signal for a
+    // remote-parented file (the origin's own File.to is almost always
+    // "@public" regardless of the real post restriction, same convention
+    // used locally) — stay conservative rather than query FeedItems again
+    // just for a cache header.
+    const cacheControl = !parentIsRemote && normalizeVisibility(effectiveTo) === '@public'
       ? 'public, max-age=300'
       : 'private, max-age=60'
 
