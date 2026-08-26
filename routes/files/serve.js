@@ -20,6 +20,8 @@ import { verifyFileSig } from '#methods/files/signedUrl.js';
 import { getViewerContext } from '#methods/visibility/context.js';
 import getSettings from '#methods/settings/get.js';
 import { Post, Reply, User, Group, Page, Bookmark, Circle } from '#schema';
+import isLocalDomain from '#methods/parse/isLocalDomain.js';
+import { hydrateRemoteFile } from '#methods/files/hydrateRemoteFile.js';
 
 const PARENT_MODELS = { Post, Reply, User, Group, Page, Bookmark, Circle };
 
@@ -115,6 +117,21 @@ export default async function serve(req, res) {
       const thumbKey = file.thumbnails?.[sizeParam];
       if (thumbKey) storageKey = thumbKey;
     }
+
+    // Remote-cached shadow File with no bytes yet (cache miss, or hydration
+    // hasn't run for this fileId) — self-heal by fetching+caching inline
+    // instead of 404ing. Public remote files only for now (see issue #57);
+    // still a no-op 404 for restricted remote files, same as before. Origin
+    // is derived from the id itself (not a stored field — reliable and
+    // matches how hydrateRemoteFile.js determines it internally).
+    if (!storageKey) {
+      const parsedId = kowloonId(fileId);
+      if (parsedId?.domain && !isLocalDomain(parsedId.domain)) {
+        const hydrated = await hydrateRemoteFile(fileId);
+        if (hydrated?.storageKey) storageKey = hydrated.storageKey;
+      }
+    }
+
     if (!storageKey) return res.status(404).json({ error: 'File has no storage key' });
 
     const storage = await getStorageAdapter();

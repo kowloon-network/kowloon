@@ -10,13 +10,12 @@
 
 import route from "../utils/route.js";
 import { activityStreamsCollection } from "../utils/oc.js";
-import { FeedItems, File, React as ReactModel } from "#schema";
+import { FeedItems, React as ReactModel } from "#schema";
 import feedItemToPost from "#methods/feed/feedItemToPost.js";
 import { getSetting } from "#methods/settings/cache.js";
 import isLocalDomain from "#methods/parse/isLocalDomain.js";
 import kowloonId from "#methods/parse/kowloonId.js";
-import { buildFileUrl, isPublicVisibility } from "#methods/files/signedUrl.js";
-import { fileIdFromValue } from "#methods/files/fileRef.js";
+import { enrichAttachments } from "#methods/files/enrichAttachments.js";
 import { excludeBlockedMuted } from "#methods/visibility/context.js";
 
 export default route(async ({ req, query, user, set, setStatus }) => {
@@ -56,6 +55,15 @@ export default route(async ({ req, query, user, set, setStatus }) => {
     const types = String(query.type).split(",").map((s) => s.trim()).filter(Boolean);
     filter.type = types.length > 1 ? { $in: types } : types[0];
   }
+  // ?kind=photo|video|audio|file (comma-separated) — e.g. ?type=Media&kind=photo
+  // returns only posts with a photo attachment. Backed by the
+  // {objectType,type,"object.attachments.kind"} FeedItems index.
+  const kinds = query.kind
+    ? String(query.kind).split(",").map((s) => s.trim()).filter(Boolean)
+    : null;
+  if (kinds?.length) {
+    filter["object.attachments.kind"] = { $in: kinds };
+  }
   if (query.since)    filter.publishedAt = { $gte: new Date(query.since) };
   if (query.serverId) {
     filter.server = query.serverId;
@@ -80,46 +88,6 @@ export default route(async ({ req, query, user, set, setStatus }) => {
     FeedItems.countDocuments(filter),
   ]);
 
-  // Collect all local file IDs used in `image` or `attachments` across all docs
-  const fileIds = new Set();
-  const restrictedFiles = new Set();
-  for (const doc of docs) {
-    const obj = doc.object ?? {};
-    const restricted = !isPublicVisibility(obj.to ?? doc.to);
-    const add = (id) => {
-      const fid = fileIdFromValue(id);
-      if (!fid) return;
-      fileIds.add(fid);
-      if (restricted) restrictedFiles.add(fid);
-    };
-    add(obj.image);
-    for (const id of obj.attachments ?? []) add(id);
-  }
-
-  // Resolve local file IDs to app-served URLs (GET /files/:id). Public files get
-  // a plain, cacheable, federation-friendly URL; restricted files get a
-  // short-lived signed URL so authorized <img> loads work without a token.
-  const presignedMap = new Map(); // fileId → { url, mediaType, name }
-  if (fileIds.size > 0) {
-    const domain = getSetting("domain");
-    const protocol = req.headers["x-forwarded-proto"] || "https";
-    const files = await File.find({ id: { $in: [...fileIds] } })
-      .select("id mediaType name summary updatedAt width height")
-      .lean();
-    for (const f of files) {
-      presignedMap.set(f.id, {
-        url: buildFileUrl({ fileId: f.id, domain, protocol, restricted: restrictedFiles.has(f.id), version: f.updatedAt ? new Date(f.updatedAt).getTime() : undefined }),
-        mediaType: f.mediaType ?? "",
-        name: f.name ?? "",
-        // Alt text (File.summary) — for the mobile viewer caption + a11y labels.
-        alt: f.summary ?? "",
-        // Pixel dimensions for aspect-ratio layout (no reflow on load).
-        width: f.width ?? null,
-        height: f.height ?? null,
-      });
-    }
-  }
-
   // The viewer's own reaction per post (for the react button state on cards).
   let myReactByTarget = new Map();
   if (user?.id && docs.length) {
@@ -138,33 +106,19 @@ export default route(async ({ req, query, user, set, setStatus }) => {
   const items = docs.map((doc) => {
     const item = feedItemToPost(doc);
     item.myReact = myReactByTarget.get(item.id) ?? null;
-
-    // Resolve featured image (file id or proxy URL)
-    const imgFid = fileIdFromValue(item.image);
-    if (imgFid) {
-      item.featuredImage = presignedMap.get(imgFid)?.url ?? null;
-    } else if (item.image?.startsWith("http")) {
-      item.featuredImage = item.image;
+    // When filtering by kind, only show the matching attachment(s) — "show
+    // just the photos", not the photo plus whatever else is on the post.
+    if (kinds?.length && item.attachments?.length) {
+      item.attachments = item.attachments.filter((a) => kinds.includes(a?.kind));
     }
-
-    // Resolve attachments: replace file IDs / proxy URLs with {url, mediaType, name}
-    if (item.attachments?.length) {
-      item.attachments = item.attachments
-        .map((id) => {
-          if (!id || typeof id !== "string") return null;
-          const entry = presignedMap.get(fileIdFromValue(id));
-          if (entry) return entry;
-          if (id.startsWith("http")) return { url: id, mediaType: "", name: "", alt: "" };
-          return null;
-        })
-        .filter(Boolean);
-    }
-
     return item;
   });
 
   const domain   = getSetting("domain");
   const protocol = req.headers["x-forwarded-proto"] || "https";
+
+  await enrichAttachments(items, { protocol });
+
   const base     = `${protocol}://${domain}${req.baseUrl}`;
 
   const collection = activityStreamsCollection({

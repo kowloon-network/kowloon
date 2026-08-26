@@ -8,6 +8,8 @@ import {
 } from "#schema";
 import { getSetting } from "#methods/settings/cache.js";
 import { getStorageAdapter } from "#methods/files/index.js";
+import kowloonId from "#methods/parse/kowloonId.js";
+import isLocalDomain from "#methods/parse/isLocalDomain.js";
 
 const SOFT_DELETE_MODELS = [Post, Reply, Page, Group, User, Bookmark];
 
@@ -90,8 +92,34 @@ async function runGC() {
     console.log(`[gc] Hard-deleted ${deletedFiles.length} expired File records`);
   }
 
+  // Pass 4: Expire stale remote-cache File shadows — our own re-fetchable
+  // mirror of another server's public media (see hydrateRemoteFile.js), not
+  // gated on deletedAt since these were never "deleted", just cached. Scoped
+  // to non-local origin (derived from the id itself, the same way the rest
+  // of the app determines it) so this can never match a real local upload,
+  // whose id always carries the local domain. Real uploads persist forever
+  // unless explicitly deleted — this only expires content that lives
+  // permanently on some OTHER Kowloon server and can always be re-fetched.
+  // Flat-TTL for now; see issue #55 for a lastViewed-based LRU follow-up.
+  const remoteCacheCandidates = await File.find({
+    deletedAt: null,
+    storageKey: { $exists: true, $ne: null },
+    updatedAt: { $lt: cutoff },
+  }).lean();
+  let totalRemoteCacheExpired = 0;
+  for (const file of remoteCacheCandidates) {
+    const parsed = kowloonId(file.id);
+    if (!parsed?.domain || isLocalDomain(parsed.domain)) continue; // real local upload — never touch
+    await deleteFileFromStorage(file);
+    await File.deleteOne({ _id: file._id });
+    totalRemoteCacheExpired++;
+  }
+  if (totalRemoteCacheExpired > 0) {
+    console.log(`[gc] Expired ${totalRemoteCacheExpired} stale remote-cache file(s)`);
+  }
+
   console.log(
-    `[gc] Done — ${totalHardDeleted} objects, ${totalFilesDeleted} files, ${totalOrphanedFeedItems} orphaned feed items`
+    `[gc] Done — ${totalHardDeleted} objects, ${totalFilesDeleted} files, ${totalOrphanedFeedItems} orphaned feed items, ${totalRemoteCacheExpired} remote-cache files expired`
   );
 }
 

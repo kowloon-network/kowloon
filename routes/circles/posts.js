@@ -2,11 +2,10 @@
 // GET /circles/:id/posts — Primary timeline view (circle-based feed)
 
 import route from "../utils/route.js";
-import { Circle, File } from "#schema";
+import { Circle } from "#schema";
 import getTimeline from "#methods/feed/getTimeline.js";
 import { getSetting } from "#methods/settings/cache.js";
-import { fileServeUrl } from "#methods/files/signedUrl.js";
-import { fileIdFromValue } from "#methods/files/fileRef.js";
+import { enrichAttachments } from "#methods/files/enrichAttachments.js";
 
 const VISIBILITY_MAP = { public: 'Public', server: 'Server', audience: 'Audience' };
 
@@ -88,68 +87,23 @@ export default route(async ({ req, params, query, user, set, setStatus }) => {
   const result = await getTimeline({ viewerId: user.id, circleId, types, before, limit });
   const normalized = result.items.map(normalizeFeedItem);
 
-  // Collect local file IDs from image and attachments fields
-  const fileIds = new Set();
-  const restrictedFiles = new Set();
-  for (const item of normalized) {
-    const restricted = item.visibility !== "Public";
-    const add = (id) => {
-      const fid = fileIdFromValue(id);
-      if (!fid) return;
-      fileIds.add(fid);
-      if (restricted) restrictedFiles.add(fid);
-    };
-    add(item.image);
-    for (const id of item.attachments ?? []) add(id);
-  }
+  // Resolve `image`/`attachments` via the shared enrichment transform. Items
+  // only carry `visibility` (Public/Server/Audience), not a raw `to` — build
+  // a throwaway parallel array so `to` never leaks into the actual response.
+  const protocol = req.headers["x-forwarded-proto"] || "https";
+  const enrichTargets = normalized.map((item) => ({
+    image: item.image,
+    attachments: item.attachments,
+    to: item.visibility === "Public" ? "public" : "server",
+  }));
+  await enrichAttachments(enrichTargets, { protocol });
 
-  // Resolve local file IDs to app-served URLs (GET /files/:id). Public files get
-  // a plain, cacheable URL; restricted files get a short-lived signed URL so
-  // authorized <img> loads work without a token.
-  const presignedMap = new Map(); // fileId → { url, mediaType, name }
-  if (fileIds.size > 0) {
-    const domain = getSetting("domain");
-    const protocol = req.headers["x-forwarded-proto"] || "https";
-    const files = await File.find({ id: { $in: [...fileIds] } })
-      .select("id mediaType name summary updatedAt url width height")
-      .lean();
-    for (const f of files) {
-      presignedMap.set(f.id, {
-        url: fileServeUrl(f, { domain, protocol, restricted: restrictedFiles.has(f.id) }),
-        mediaType: f.mediaType ?? "",
-        name: f.name ?? "",
-        // Alt text (File.summary) — for the mobile viewer caption + a11y labels.
-        alt: f.summary ?? "",
-        // Pixel dimensions for aspect-ratio layout (no reflow on load).
-        width: f.width ?? null,
-        height: f.height ?? null,
-      });
-    }
-  }
-
-  const orderedItems = normalized.map((item) => {
-    const imgFid = fileIdFromValue(item.image);
-    if (imgFid) {
-      item.featuredImage = presignedMap.get(imgFid)?.url ?? null;
-    } else if (item.image?.startsWith("http")) {
-      item.featuredImage = item.image;
-    }
-
-    if (item.attachments?.length) {
-      item.attachments = item.attachments
-        .map((id) => {
-          if (!id || typeof id !== "string") return null;
-          const entry = presignedMap.get(fileIdFromValue(id));
-          if (entry) return entry;
-          if (id.startsWith("http")) return { url: id, mediaType: "", name: "", alt: "" };
-          return null;
-        })
-        .filter(Boolean);
-    }
+  const orderedItems = normalized.map((item, i) => {
+    item.featuredImage = enrichTargets[i].featuredImage ?? null;
+    item.attachments = enrichTargets[i].attachments ?? [];
     return item;
   });
 
-  const protocol = req.headers["x-forwarded-proto"] || "https";
   const baseUrl = `${protocol}://${domain}/circles/${encodeURIComponent(circleId)}/posts`;
 
   set("@context", "https://www.w3.org/ns/activitystreams");

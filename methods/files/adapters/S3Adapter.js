@@ -68,9 +68,10 @@ export default class S3Adapter extends StorageAdapter {
       generateThumbnail = false,
       thumbnailSizes = [200, 400],
       isPublic = true,
+      prefix = '',
     } = options;
 
-    const key = this.generateKey(originalFileName);
+    const key = this.generateKey(originalFileName, prefix);
     const mimeType = contentType || mime.lookup(originalFileName) || 'application/octet-stream';
 
     // File contents under a given storage key are immutable, so the bytes can

@@ -63,15 +63,19 @@ export function buildFileUrl({ fileId, domain, protocol = "https", restricted = 
   return `${base}?${q}`;
 }
 
-// Resolve a File doc to a client-usable URL. Local files get a (possibly signed,
-// version-busted) /files/:id URL on THIS server; remote federated-cache files
-// (id domain != local) return their stored origin URL, because the bytes live on
-// the origin server, not here. Pairs with hydrateRemoteFile.js.
+// Resolve a File doc to a client-usable URL. Any file with a local storageKey
+// — local upload or remote-cached bytes (see hydrateRemoteFile.js) — gets a
+// (possibly signed, version-busted) /files/:id URL on THIS server, since our
+// own proxy can serve it directly. A remote shadow with no storageKey yet
+// (not cached, or restricted — see issue #57) falls back to its stored origin
+// URL so it still renders while hydration catches up.
 export function fileServeUrl(file, { domain, protocol = "https", restricted = false } = {}) {
   if (!file) return null;
-  const parsed = kowloonId(file.id);
-  if (parsed?.domain && !isLocalDomain(parsed.domain)) {
-    return file.url || null; // remote: bytes live at the origin
+  if (!file.storageKey) {
+    const parsed = kowloonId(file.id);
+    if (parsed?.domain && !isLocalDomain(parsed.domain)) {
+      return file.url || null; // not cached locally — bytes live at the origin
+    }
   }
   const version = file.updatedAt ? new Date(file.updatedAt).getTime() : undefined;
   return buildFileUrl({ fileId: file.id, domain, protocol, restricted, version });

@@ -195,7 +195,10 @@ export default async function pullFromRemote({
       for (const item of items) {
         const o = item?.object || {};
         for (const v of [o.image, ...(o.attachments || [])]) {
-          const fid = fileIdFromValue(v);
+          // Post.attachments is now a resolved {fileId, ...} object on peers
+          // that have migrated; other servers deploy independently, so a
+          // peer may still send the legacy bare-string shape.
+          const fid = typeof v === "string" ? fileIdFromValue(v) : v?.fileId || null;
           if (fid) remoteFileIds.add(fid);
         }
       }

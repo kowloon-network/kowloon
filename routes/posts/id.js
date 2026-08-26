@@ -1,13 +1,11 @@
 import route from "../utils/route.js";
-import { FeedItems, File, Post, React as ReactModel } from "#schema";
+import { FeedItems, Post, React as ReactModel } from "#schema";
 import {
   canView,
   buildFollowerMap,
   enrichWithCapabilities,
 } from "#methods/feed/visibility.js";
-import { fileServeUrl, isPublicVisibility } from "#methods/files/signedUrl.js";
-import { fileIdFromValue } from "#methods/files/fileRef.js";
-import { getSetting } from "#methods/settings/cache.js";
+import { enrichAttachments } from "#methods/files/enrichAttachments.js";
 
 const VISIBILITY_MAP = { public: "Public", server: "Server", audience: "Audience" };
 
@@ -52,61 +50,16 @@ export default route(async ({ req, params, set, setStatus }) => {
     visibility: VISIBILITY_MAP[feedCacheItem.to] ?? "Public",
   };
 
-  // Resolve local file IDs to app-served URLs (GET /files/:id). Remote file:
-  // IDs would have been rewritten to HTTP URLs during federation.
-  const localFileIds = new Set();
-  const imgFid0 = fileIdFromValue(response.image);
-  if (imgFid0) localFileIds.add(imgFid0);
-  for (const id of response.attachments ?? []) {
-    const fid = fileIdFromValue(id);
-    if (fid) localFileIds.add(fid);
-  }
-
-  const presignedMap = new Map(); // fileId → { url, mediaType, name }
-  if (localFileIds.size > 0) {
-    // All of a post's files inherit the post's visibility. Public → plain,
-    // cacheable URL; restricted → short-lived signed URL for authorized <img>.
-    const restricted = !isPublicVisibility(response.to ?? feedCacheItem.to);
-    const domain = getSetting("domain");
-    const protocol = req.headers["x-forwarded-proto"] || "https";
-    const files = await File.find({ id: { $in: [...localFileIds] } })
-      .select("id mediaType name summary updatedAt url width height")
-      .lean();
-    for (const f of files) {
-      presignedMap.set(f.id, {
-        url: fileServeUrl(f, { domain, protocol, restricted }),
-        mediaType: f.mediaType ?? "",
-        name: f.name ?? "",
-        // Alt text (File.summary) — for the mobile viewer caption + a11y labels.
-        alt: f.summary ?? "",
-        // Pixel dimensions for aspect-ratio layout (no reflow on load).
-        width: f.width ?? null,
-        height: f.height ?? null,
-      });
-    }
-  }
-
-  const imgFid = fileIdFromValue(response.image);
-  if (imgFid) {
-    response.featuredImage = presignedMap.get(imgFid)?.url ?? null;
-  } else if (response.image?.startsWith("http")) {
-    response.featuredImage = response.image;
-  }
-
-  if (response.attachments?.length) {
-    response.attachments = response.attachments
-      .map((id) => {
-        if (!id || typeof id !== "string") return null;
-        const fid = fileIdFromValue(id);
-        const entry = presignedMap.get(fid);
-        // Include the source file ID so the owner's edit screen can preserve
-        // existing attachments (the URL alone can't be re-sent on update).
-        if (entry) return { ...entry, fileId: fid };
-        if (id.startsWith("http")) return { url: id, mediaType: "", name: "", alt: "" };
-        return null;
-      })
-      .filter(Boolean);
-  }
+  // Resolve `image`/`attachments` to client-usable URLs via the shared
+  // enrichment transform. All of a post's files inherit the post's
+  // visibility — use feedCacheItem.to (the coarse enum) rather than
+  // response.to, which is only populated below for the owner and would
+  // otherwise leak into this response for non-owners.
+  const enrichTarget = { image: response.image, attachments: response.attachments, to: feedCacheItem.to };
+  const protocol = req.headers["x-forwarded-proto"] || "https";
+  await enrichAttachments([enrichTarget], { protocol });
+  response.featuredImage = enrichTarget.featuredImage ?? null;
+  response.attachments = enrichTarget.attachments ?? [];
 
   // Map event dates for all viewers
   if (feedCacheItem.type === 'Event') {

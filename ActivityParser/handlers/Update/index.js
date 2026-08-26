@@ -19,6 +19,7 @@ import getFederationTargetsHelper from "../utils/getFederationTargets.js";
 import refreshActorCache from "#methods/users/refreshActorCache.js";
 import sanitizeHtml from "#methods/utils/sanitize.js";
 import { getServerSettings } from "#methods/settings/schemaHelpers.js";
+import resolveAttachments from "#methods/files/resolveAttachment.js";
 
 // Reply (and React) records have empty `to` by design — visibility inherits
 // from the parent — so the generic federation helper returns no targets. For
@@ -237,9 +238,15 @@ export default async function Update(activity) {
       }
       delete activity.object.featuredImage;
       if (Array.isArray(activity.object.attachments)) {
-        activity.object.attachments = activity.object.attachments
-          .map((a) => (typeof a === "string" ? a : a?.fileId))
-          .filter(Boolean);
+        if (parsed.type === "Post") {
+          // Post stores the fully-resolved Attachment subdocument shape.
+          activity.object.attachments = await resolveAttachments(activity.object.attachments);
+        } else {
+          // Page still stores bare File-ID strings — not touched here, see issue #52.
+          activity.object.attachments = activity.object.attachments
+            .map((a) => (typeof a === "string" ? a : a?.fileId))
+            .filter(Boolean);
+        }
       }
       // Location → GeoPoint, mirroring Create. Mobile sends bare { name, lat, lon }
       // (no type:"Place"); without this it fails GeoPoint validation on edit (#55).
@@ -426,7 +433,10 @@ export default async function Update(activity) {
         patch.source.content !== undefined;
 
       if (sourceChanged) {
-        const doc = await Model.findOne(query);
+        // Never touches attachments (only re-renders body/summary/signature
+        // from source) — excluded to stay safe while attachments may still
+        // hold legacy string data under the new subdocument schema.
+        const doc = await Model.findOne(query).select("-attachments");
         if (!doc) {
           return { activity, error: `Update: failed to update ${activity.target}` };
         }

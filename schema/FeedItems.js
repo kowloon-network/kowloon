@@ -114,5 +114,6 @@ FeedItemsSchema.index({ actorId: 1, publishedAt: -1, _id: -1 }); // author timel
 FeedItemsSchema.index({ originDomain: 1, publishedAt: -1 }); // ops/domain scans
 FeedItemsSchema.index({ objectType: 1, publishedAt: -1 }); // type-filtered
 FeedItemsSchema.index({ to: 1, publishedAt: -1 }); // public/server/audience scans
+FeedItemsSchema.index({ objectType: 1, type: 1, "object.attachments.kind": 1 }); // kind-filtered queries
 
 export default mongoose.model("FeedItems", FeedItemsSchema);

@@ -23,6 +23,7 @@ import notifyFeedActivity from "#methods/notifications/notifyFeedActivity.js";
 import notifyMentions from "#methods/mentions/notify.js";
 import writeFeedItems from "#methods/feed/writeFeedItems.js";
 import sanitizeHtml from "#methods/utils/sanitize.js";
+import resolveAttachments from "#methods/files/resolveAttachment.js";
 
 // Strip dangerous HTML tags from Markdown source while preserving:
 //   1. Markdown syntax — sanitize-html encodes stray > chars to &gt;, which
@@ -411,11 +412,12 @@ export default async function Create(activity) {
       }
     }
 
-    // Normalize attachments: client sends [{fileId, title, alt}]; schema stores [String] (File IDs only)
-    if (Array.isArray(activity.object.attachments) && activity.object.attachments.length > 0) {
-      activity.object.attachments = activity.object.attachments.map((a) =>
-        typeof a === 'string' ? a : a?.fileId ?? a?.id ?? String(a)
-      ).filter(Boolean);
+    // Normalize attachments: client sends [{fileId, title, alt}] (or legacy
+    // bare strings); Post schema stores the fully-resolved Attachment
+    // subdocument shape. Page/Reply still store bare File-ID strings — not
+    // touched here, see issue #52.
+    if (type === "Post" && Array.isArray(activity.object.attachments) && activity.object.attachments.length > 0) {
+      activity.object.attachments = await resolveAttachments(activity.object.attachments);
     }
 
     // Map Event startTime/endTime → event.startDate/event.endDate for Post schema
@@ -530,6 +532,7 @@ export default async function Create(activity) {
       if (Array.isArray(activity.object.attachments)) {
         for (const a of activity.object.attachments) {
           if (typeof a === "string" && a.startsWith("file:")) fileIds.add(a);
+          else if (a?.fileId) fileIds.add(a.fileId);
         }
       }
       if (fileIds.size > 0) {

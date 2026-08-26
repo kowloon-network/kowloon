@@ -5,6 +5,7 @@ import { signData, verifyData, signAs, verifyAs } from "#methods/utils/signing.j
 import { Settings, User, React, Reply, Circle } from "./index.js";
 import GeoPoint from "./subschema/GeoPoint.js";
 import ActorSchema from "./subschema/Actor.js";
+import AttachmentSchema from "./subschema/Attachment.js";
 import { getServerSettings } from "#methods/settings/schemaHelpers.js";
 import { linkifyMentions } from "#methods/mentions/linkify.js";
 
@@ -142,7 +143,7 @@ const PostSchema = new Schema(
     reactSummary: { type: String, default: null }, // Distinct emojis joined, sorted by count desc
     shareCount: { type: Number, default: 0 }, // The number of shares of this post
     image: { type: String, default: undefined }, // The post's featured/preview image (File ID or URL for backwards compatibility)
-    attachments: { type: [String], default: [] }, // Array of File IDs
+    attachments: { type: [AttachmentSchema], default: [] }, // Resolved File references, see schema/subschema/Attachment.js
     tags: { type: [String], default: [] },
     location: { type: GeoPoint, default: undefined }, // A geotag for the post in the ActivityStreams geolocation format
     event: {
@@ -177,6 +178,8 @@ PostSchema.index({
   "location.name": "text",
 });
 
+PostSchema.index({ type: 1, "attachments.kind": 1 });
+
 PostSchema.virtual("reacts", {
   ref: "React",
   localField: "id",
@@ -187,12 +190,6 @@ PostSchema.virtual("replies", {
   ref: "Reply",
   localField: "id",
   foreignField: "target",
-});
-
-PostSchema.virtual("attachmentFiles", {
-  ref: "File",
-  localField: "attachments",
-  foreignField: "id",
 });
 
 // Render source content to sanitized HTML.

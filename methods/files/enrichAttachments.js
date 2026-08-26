@@ -1,18 +1,21 @@
 // Resolve post `image` + `attachments` references to client-usable shapes.
 //
-// Posts store images/attachments as "file:<id>@domain" ids or app file-proxy
-// URLs. Clients need absolute URLs (featuredImage) and { url, mediaType, name }
-// objects (attachments) with a mediaType so they can tell an image from audio.
-// The feed endpoints (posts/collection, circles/posts) do this inline; this is
-// the shared version so the endpoints that only ran feedItemToPost() — My Posts
-// (users/posts) and group feeds — enrich too. Mutates `items` in place.
+// `attachments` is now a persisted, fully-resolved Attachment subdocument
+// (fileId/mediaType/kind/name/alt/width/height — see schema/subschema/Attachment.js),
+// snapshotted at write time. Reading it back is a pure transform: build the
+// serving URL from fileId, no File lookup needed. `image` is a separate,
+// untouched field (still a bare File-ID/URL string) and still needs one.
 //
-// Restricted (non-public) files get a short-lived signed URL; every URL carries
-// a ?v=updatedAt cache-buster so a corrected image (e.g. an orientation fix)
-// isn't pinned in client caches.
+// Transition tolerance: a bare-string attachment (an unmigrated doc, or a
+// federation peer on an older deploy) falls back to the old on-the-fly File
+// lookup so it still renders correctly. Drop this fallback once all 3
+// servers are confirmed migrated (scripts/migrate-post-attachments.js).
+//
+// Restricted (non-public) files get a short-lived signed URL. Mutates
+// `items` in place.
 
 import { File } from "#schema";
-import { fileServeUrl, isPublicVisibility } from "#methods/files/signedUrl.js";
+import { buildFileUrl, isPublicVisibility } from "#methods/files/signedUrl.js";
 import { fileIdFromValue } from "#methods/files/fileRef.js";
 import { getSetting } from "#methods/settings/cache.js";
 
@@ -20,59 +23,107 @@ export async function enrichAttachments(items, { protocol = "https" } = {}) {
   if (!Array.isArray(items) || items.length === 0) return items;
   const domain = getSetting("domain");
 
-  const fileIds = new Set();
-  const restrictedIds = new Set();
+  // Gather image fileIds and any legacy (bare-string) attachment fileIds —
+  // the only two cases that still need a File lookup.
+  const legacyFileIds = new Set();
+  const restrictedLegacyIds = new Set();
   for (const item of items) {
     const restricted = !isPublicVisibility(item?.to);
     const add = (v) => {
       const fid = fileIdFromValue(v);
       if (!fid) return;
-      fileIds.add(fid);
-      if (restricted) restrictedIds.add(fid);
+      legacyFileIds.add(fid);
+      if (restricted) restrictedLegacyIds.add(fid);
     };
     add(item?.image);
-    for (const a of item?.attachments ?? []) add(a);
+    for (const a of item?.attachments ?? []) {
+      if (typeof a === "string") add(a);
+    }
   }
 
-  const map = new Map();
-  if (fileIds.size > 0) {
-    const files = await File.find({ id: { $in: [...fileIds] } })
-      .select("id mediaType name summary updatedAt url width height")
+  const legacyMap = new Map();
+  if (legacyFileIds.size > 0) {
+    const files = await File.find({ id: { $in: [...legacyFileIds] } })
+      .select("id mediaType name summary width height")
       .lean();
     for (const f of files) {
-      map.set(f.id, {
-        url: fileServeUrl(f, { domain, protocol, restricted: restrictedIds.has(f.id) }),
+      legacyMap.set(f.id, {
+        fileId: f.id,
         mediaType: f.mediaType ?? "",
+        kind: mapKind(f.mediaType),
         name: f.name ?? "",
-        // Alt text (File.summary) — for the full-screen viewer's caption overlay
-        // and image accessibility labels.
         alt: f.summary ?? "",
-        // Pixel dimensions (post-orientation) so clients can lay out images at
-        // the right aspect ratio without a layout shift.
         width: f.width ?? null,
         height: f.height ?? null,
+        restricted: restrictedLegacyIds.has(f.id),
       });
     }
   }
 
   for (const item of items) {
+    const restricted = !isPublicVisibility(item?.to);
+
     const imgFid = fileIdFromValue(item?.image);
-    if (imgFid) item.featuredImage = map.get(imgFid)?.url ?? null;
-    else if (typeof item?.image === "string" && item.image.startsWith("http"))
+    if (imgFid) {
+      item.featuredImage = buildFileUrl({ fileId: imgFid, domain, protocol, restricted });
+    } else if (typeof item?.image === "string" && item.image.startsWith("http")) {
       item.featuredImage = item.image;
+    }
 
     if (item?.attachments?.length) {
       item.attachments = item.attachments
-        .map((v) => {
-          const entry = map.get(fileIdFromValue(v));
-          if (entry) return entry;
-          if (typeof v === "string" && v.startsWith("http"))
-            return { url: v, mediaType: "", name: "", alt: "" };
-          return null;
-        })
+        .map((a) => resolveOne(a, { domain, protocol, restricted, legacyMap }))
         .filter(Boolean);
     }
   }
 
   return items;
+}
+
+function mapKind(mediaType) {
+  const mt = String(mediaType || "");
+  if (mt.startsWith("image/")) return "photo";
+  if (mt.startsWith("video/")) return "video";
+  if (mt.startsWith("audio/")) return "audio";
+  return "file";
+}
+
+function resolveOne(a, { domain, protocol, restricted, legacyMap }) {
+  // Current shape: a fully-resolved Attachment subdocument — pure transform.
+  if (a && typeof a === "object" && a.fileId) {
+    return {
+      url: buildFileUrl({ fileId: a.fileId, domain, protocol, restricted }),
+      fileId: a.fileId,
+      mediaType: a.mediaType ?? "",
+      kind: a.kind ?? "file",
+      name: a.name ?? "",
+      alt: a.alt ?? "",
+      width: a.width ?? null,
+      height: a.height ?? null,
+    };
+  }
+
+  // Legacy bare string — resolve via the batched File lookup above.
+  if (typeof a === "string") {
+    const fid = fileIdFromValue(a);
+    if (fid) {
+      const entry = legacyMap.get(fid);
+      if (entry) {
+        return {
+          url: buildFileUrl({ fileId: fid, domain, protocol, restricted }),
+          fileId: fid,
+          mediaType: entry.mediaType,
+          kind: entry.kind,
+          name: entry.name,
+          alt: entry.alt,
+          width: entry.width,
+          height: entry.height,
+        };
+      }
+      return { url: buildFileUrl({ fileId: fid, domain, protocol, restricted }), fileId: fid, mediaType: "", kind: "file", name: "", alt: "", width: null, height: null };
+    }
+    if (a.startsWith("http")) return { url: a, mediaType: "", kind: "file", name: "", alt: "" };
+  }
+
+  return null;
 }

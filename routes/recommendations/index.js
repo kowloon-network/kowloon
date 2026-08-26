@@ -21,7 +21,6 @@ import {
   Page,
   FederatedServer,
   Settings,
-  File,
   FeedItems,
 } from "#schema";
 import { getSetting } from "#methods/settings/cache.js";
@@ -65,9 +64,10 @@ function shapeCard(refType, doc, note, { domain, protocol, restricted }) {
   const base = { id: doc.id, refType, to: doc.to, note: note || null };
   switch (refType) {
     case "Post": {
-      // Media posts keep their images in `attachments` (File IDs), not `image`;
-      // expose a best-effort thumbnail for the media row (featured, else first
-      // attachment).
+      // Media posts keep their images in `attachments`, not `image`; expose a
+      // best-effort thumbnail for the media row (featured, else first
+      // attachment). Attachments are stored fully-resolved (fileId/kind/
+      // mediaType/name already inline) — no File lookup needed to classify.
       const firstAtt = Array.isArray(doc.attachments) ? doc.attachments[0] : null;
       return {
         ...base,
@@ -78,9 +78,9 @@ function shapeCard(refType, doc, note, { domain, protocol, restricted }) {
         // content. Same field the feed card falls back to.
         preview: doc.textPreview || null,
         featuredImage: resolveImg(doc.image, domain, protocol, restricted),
-        mediaImage: resolveImg(doc.image || firstAtt, domain, protocol, restricted),
-        // Raw first-attachment id (only when there's no featured image) so the
-        // media enrichment pass can resolve its kind (image/video/audio).
+        mediaImage: resolveImg(doc.image || firstAtt?.fileId, domain, protocol, restricted),
+        // First-attachment metadata (only when there's no featured image) so the
+        // media enrichment pass can classify kind (photo/video/audio) below.
         _firstAtt: doc.image ? null : firstAtt || null,
         actor: doc.actor
           ? { id: doc.actorId, name: doc.actor.name, icon: doc.actor.icon }
@@ -300,31 +300,22 @@ router.get(
         });
       }
 
-      // Enrich media-row items with their first attachment's kind (image/video/
-      // audio) + playable URL, so the client can render a video/audio player
-      // instead of a broken image tile.
-      const attIds = [];
+      // Classify media-row items by their first attachment's kind (photo/video/
+      // audio), so the client can render a video/audio player instead of a
+      // broken image tile. kind/mediaType/name are already resolved on the
+      // stored Attachment subdocument — no File lookup needed.
       for (const s of out) {
         if (s.contentType !== "media") continue;
-        for (const it of s.items) if (it._firstAtt) attIds.push(it._firstAtt);
-      }
-      if (attIds.length) {
-        const files = await File.find({ id: { $in: attIds } })
-          .select("id mediaType name")
-          .lean();
-        const fmap = new Map(files.map((f) => [f.id, f]));
-        for (const s of out) {
-          if (s.contentType !== "media") continue;
-          for (const it of s.items) {
-            const mt = (it._firstAtt && fmap.get(it._firstAtt)?.mediaType) || "";
-            it.mediaKind = mt.startsWith("video/") ? "video" : mt.startsWith("audio/") ? "audio" : "image";
-            it.mediaName = fmap.get(it._firstAtt)?.name || it.title || null;
-            // For video/audio, mediaImage is the playable file URL — expose it as
-            // mediaUrl and clear mediaImage so the client draws a player tile.
-            if (it.mediaKind !== "image") {
-              it.mediaUrl = it.mediaImage;
-              it.mediaImage = null;
-            }
+        for (const it of s.items) {
+          const att = it._firstAtt;
+          const kind = att?.kind === "video" || att?.kind === "audio" ? att.kind : "image";
+          it.mediaKind = kind;
+          it.mediaName = att?.name || it.title || null;
+          // For video/audio, mediaImage is the playable file URL — expose it as
+          // mediaUrl and clear mediaImage so the client draws a player tile.
+          if (it.mediaKind !== "image") {
+            it.mediaUrl = it.mediaImage;
+            it.mediaImage = null;
           }
         }
       }

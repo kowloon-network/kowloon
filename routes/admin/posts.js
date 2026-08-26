@@ -6,6 +6,7 @@ import { Post, FeedItems } from "#schema";
 import writeFeedItems from "#methods/feed/writeFeedItems.js";
 import { getSetting } from "#methods/settings/cache.js";
 import { getServerActor } from "#methods/settings/schemaHelpers.js";
+import resolveAttachments from "#methods/files/resolveAttachment.js";
 
 const router = express.Router({ mergeParams: true });
 
@@ -94,6 +95,9 @@ router.post(
       const fields = pick(body, ALLOWED_FIELDS);
       if (!fields.type) fields.type = "Note";
       if (!fields.to) fields.to = "@public";
+      if (fields.attachments) {
+        fields.attachments = await resolveAttachments(fields.attachments);
+      }
 
       const post = await Post.create({
         ...fields,
@@ -118,7 +122,7 @@ router.patch(
       const post = await Post.findOne({
         id: decodeURIComponent(params.id),
         deletedAt: null,
-      });
+      }).select("-attachments");
 
       if (!post) {
         setStatus(404);
@@ -133,6 +137,9 @@ router.patch(
       }
 
       const fields = pick(body, ALLOWED_FIELDS);
+      if (fields.attachments) {
+        fields.attachments = await resolveAttachments(fields.attachments);
+      }
       Object.assign(post, fields);
       await post.save();
 
@@ -150,7 +157,7 @@ router.delete(
   "/:id",
   route(
     async ({ params, query, user: adminUser, set, setStatus }) => {
-      const post = await Post.findOne({ id: decodeURIComponent(params.id) });
+      const post = await Post.findOne({ id: decodeURIComponent(params.id) }).select("-attachments");
 
       if (!post) {
         setStatus(404);
@@ -188,7 +195,7 @@ router.post(
   "/:id/restore",
   route(
     async ({ params, set, setStatus }) => {
-      const post = await Post.findOne({ id: decodeURIComponent(params.id) });
+      const post = await Post.findOne({ id: decodeURIComponent(params.id) }).select("-attachments");
 
       if (!post) {
         setStatus(404);
