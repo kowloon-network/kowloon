@@ -14,11 +14,18 @@
 // Idempotent: only matches docs whose first attachment element is still a
 // string, so already-migrated docs are skipped on a re-run.
 //
+// Also backfills the matching FeedItems.object.attachments — FeedItems is a
+// separate, denormalized copy of the post content (written at create/update
+// time by methods/feed/writeFeedItems.js) and is what the public read paths
+// (GET /posts, GET /posts/:id) actually query, not Post directly. Without
+// this, a migrated Post reads correctly via routes that hit Post, but the
+// public feed/kind-filter queries keep seeing the pre-migration shape.
+//
 // Usage:
 //   MONGO_URI=... node scripts/migrate-post-attachments.js [--dry-run]
 
 import mongoose from "mongoose";
-import { Post, File } from "../schema/index.js";
+import { Post, File, FeedItems } from "../schema/index.js";
 import { fileIdFromValue } from "../methods/files/fileRef.js";
 import { mapKind } from "../methods/files/resolveAttachment.js";
 
@@ -108,7 +115,7 @@ async function main() {
   }
 
   if (DRY_RUN) {
-    console.log(`\n--dry-run: no changes written. Would update ${updates.length} posts.`);
+    console.log(`\n--dry-run: no changes written. Would update ${updates.length} posts (Post + matching FeedItems).`);
     await mongoose.disconnect();
     return;
   }
@@ -121,6 +128,15 @@ async function main() {
   }));
   const result = await Post.bulkWrite(ops, { ordered: false });
   console.log(`\nUpdated ${result.modifiedCount ?? updates.length} posts.`);
+
+  const feedItemOps = updates.map((u) => ({
+    updateOne: {
+      filter: { id: u.id },
+      update: { $set: { "object.attachments": u.attachments } },
+    },
+  }));
+  const fiResult = await FeedItems.bulkWrite(feedItemOps, { ordered: false });
+  console.log(`Updated ${fiResult.modifiedCount ?? 0} matching FeedItems (${feedItemOps.length - (fiResult.matchedCount ?? 0)} had no matching FeedItems doc — fine, e.g. never fanned out).`);
 
   await mongoose.disconnect();
 }
