@@ -200,6 +200,16 @@ export default async function serve(req, res) {
     const exists = await storage.exists(storageKey);
     if (!exists) return res.status(404).json({ error: 'File not found in storage' });
 
+    // LRU signal for remote-cache expiry (methods/gc/index.js, issue #55) —
+    // only meaningful for a file we don't originate ourselves; a real local
+    // upload never expires regardless of this field, so skip the write for
+    // those (the vast majority of traffic). Fire-and-forget: never block
+    // serving bytes on it.
+    const fileDomain = kowloonId(fileId)?.domain;
+    if (fileDomain && !isLocalDomain(fileDomain)) {
+      File.updateOne({ id: fileId }, { $set: { lastViewed: new Date() } }).catch(() => {});
+    }
+
     // Thumbnails are generated as webp; originals carry their own mediaType.
     const isThumb = !!(sizeParam && file.thumbnails?.[sizeParam]);
     const contentType = isThumb

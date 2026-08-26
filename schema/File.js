@@ -30,6 +30,12 @@ const FileSchema = new Schema(
       index: true,
     },
     deletedAt: { type: Date, default: null }, // If the object is deleted, when it was deleted
+    // Bumped on each successful GET /files/:id serve (routes/files/serve.js).
+    // Only meaningfully used for remote-cache expiry (methods/gc/index.js) —
+    // an LRU signal so an actively-viewed cached copy of another server's
+    // media survives longer than a flat time-since-cached TTL. Real local
+    // uploads are never expired regardless of this field (see gc/index.js).
+    lastViewed: { type: Date, default: null },
   },
   { timestamps: true }
 );

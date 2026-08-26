@@ -100,11 +100,20 @@ async function runGC() {
   // whose id always carries the local domain. Real uploads persist forever
   // unless explicitly deleted — this only expires content that lives
   // permanently on some OTHER Kowloon server and can always be re-fetched.
-  // Flat-TTL for now; see issue #55 for a lastViewed-based LRU follow-up.
+  //
+  // LRU via lastViewed (bumped by routes/files/serve.js on each successful
+  // serve, issue #55) rather than a flat time-since-cached TTL — an actively
+  // viewed cached file survives; an ignored one doesn't, regardless of when
+  // it was first hydrated. Falls back to updatedAt for shadows that predate
+  // this field (lastViewed still null — never served since the upgrade, or
+  // hydrated-but-never-viewed) so those aren't pinned forever.
   const remoteCacheCandidates = await File.find({
     deletedAt: null,
     storageKey: { $exists: true, $ne: null },
-    updatedAt: { $lt: cutoff },
+    $or: [
+      { lastViewed: { $lt: cutoff } },
+      { lastViewed: null, updatedAt: { $lt: cutoff } },
+    ],
   }).lean();
   let totalRemoteCacheExpired = 0;
   for (const file of remoteCacheCandidates) {
