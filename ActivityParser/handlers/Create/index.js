@@ -413,10 +413,11 @@ export default async function Create(activity) {
     }
 
     // Normalize attachments: client sends [{fileId, title, alt}] (or legacy
-    // bare strings); Post schema stores the fully-resolved Attachment
-    // subdocument shape. Page/Reply still store bare File-ID strings — not
-    // touched here, see issue #52.
-    if (type === "Post" && Array.isArray(activity.object.attachments) && activity.object.attachments.length > 0) {
+    // bare strings); Post AND Page (issue #52) store the fully-resolved
+    // Attachment subdocument shape. Reply is created via its own
+    // self-contained handler (ActivityParser/handlers/Reply/index.js), not
+    // this generic path, so it's not handled here.
+    if ((type === "Post" || type === "Page") && Array.isArray(activity.object.attachments) && activity.object.attachments.length > 0) {
       activity.object.attachments = await resolveAttachments(activity.object.attachments);
     }
 

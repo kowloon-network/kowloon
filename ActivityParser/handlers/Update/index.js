@@ -66,7 +66,7 @@ const MODELS = {
 const ALLOWED_FIELDS = {
   User:     new Set(["profile", "prefs", "to", "canReply", "canReact", "email", "username"]),
   Post:     new Set(["title", "summary", "source", "body", "type", "tags", "to", "canReply", "canReact", "image", "attachments", "href", "target", "location", "event"]),
-  Reply:    new Set(["source", "body", "tags"]),
+  Reply:    new Set(["source", "body", "tags", "attachments"]),
   Page:     new Set(["title", "summary", "source", "body", "slug", "tags", "to", "canReply", "canReact", "image", "attachments", "href", "parentId", "order"]),
   Bookmark: new Set(["title", "summary", "source", "body", "type", "tags", "to", "canReply", "canReact", "href", "target", "parentFolder", "image"]),
   Circle:   new Set(["name", "summary", "icon", "to", "canReply", "canReact"]),
@@ -238,11 +238,10 @@ export default async function Update(activity) {
       }
       delete activity.object.featuredImage;
       if (Array.isArray(activity.object.attachments)) {
-        if (parsed.type === "Post") {
-          // Post stores the fully-resolved Attachment subdocument shape.
+        if (parsed.type === "Post" || parsed.type === "Page" || parsed.type === "Reply") {
+          // Post/Page/Reply all store the fully-resolved Attachment subdocument shape (#52).
           activity.object.attachments = await resolveAttachments(activity.object.attachments);
         } else {
-          // Page still stores bare File-ID strings — not touched here, see issue #52.
           activity.object.attachments = activity.object.attachments
             .map((a) => (typeof a === "string" ? a : a?.fileId))
             .filter(Boolean);

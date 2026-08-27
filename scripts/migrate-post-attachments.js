@@ -1,6 +1,9 @@
 #!/usr/bin/env node
-// Convert Post.attachments from legacy bare strings ([String]) to the
-// persisted Attachment subdocument shape (schema/subschema/Attachment.js).
+// Convert Post.attachments AND Page.attachments from legacy bare strings
+// ([String]) to the persisted Attachment subdocument shape
+// (schema/subschema/Attachment.js). Same migration, two source-of-truth
+// collections — Page attachments went through the identical [String] ->
+// [AttachmentSchema] schema change as Post (issue #52).
 //
 // Legacy strings are one of three shapes (see methods/files/fileRef.js):
 //   - a local/federated Kowloon file id ("file:<id>@domain")
@@ -33,9 +36,14 @@
 //   MONGO_URI=... node scripts/migrate-post-attachments.js [--dry-run]
 
 import mongoose from "mongoose";
-import { Post, File, FeedItems } from "../schema/index.js";
+import { Post, Page, File, FeedItems } from "../schema/index.js";
 import { fileIdFromValue } from "../methods/files/fileRef.js";
 import { mapKind } from "../methods/files/resolveAttachment.js";
+
+const MODELS = [
+  { model: Post, name: "Post" },
+  { model: Page, name: "Page" },
+];
 
 const DRY_RUN = process.argv.includes("--dry-run");
 const MONGO_URI =
@@ -81,27 +89,34 @@ function resolveAttachments(rawAttachments, fileMap, stats) {
 async function main() {
   await mongoose.connect(MONGO_URI);
 
-  const unmigratedPosts = await Post.find({ "attachments.0": { $type: "string" } })
-    .select("id attachments")
-    .lean();
+  const unmigratedByModel = {};
+  for (const { model, name } of MODELS) {
+    unmigratedByModel[name] = await model
+      .find({ "attachments.0": { $type: "string" } })
+      .select("id attachments")
+      .lean();
+    console.log(`Found ${unmigratedByModel[name].length} ${name} docs with unmigrated (string) attachments.`);
+  }
   const staleFeedItems = await FeedItems.find({ "object.attachments.0": { $type: "string" } })
     .select("id")
     .lean();
-
-  console.log(`Found ${unmigratedPosts.length} posts with unmigrated (string) attachments.`);
   console.log(`Found ${staleFeedItems.length} FeedItems with a stale (string) attachments copy.`);
 
-  if (unmigratedPosts.length === 0 && staleFeedItems.length === 0) {
+  const totalUnmigrated = MODELS.reduce((n, { name }) => n + unmigratedByModel[name].length, 0);
+  if (totalUnmigrated === 0 && staleFeedItems.length === 0) {
     await mongoose.disconnect();
     return;
   }
 
-  // Batch-resolve every referenced fileId across the whole run, not per-doc.
+  // Batch-resolve every referenced fileId across the whole run (both models
+  // combined), not per-doc.
   const fileIds = new Set();
-  for (const doc of unmigratedPosts) {
-    for (const raw of doc.attachments) {
-      const fid = fileIdFromValue(raw);
-      if (fid) fileIds.add(fid);
+  for (const { name } of MODELS) {
+    for (const doc of unmigratedByModel[name]) {
+      for (const raw of doc.attachments) {
+        const fid = fileIdFromValue(raw);
+        if (fid) fileIds.add(fid);
+      }
     }
   }
   const files = await File.find({ id: { $in: [...fileIds] } })
@@ -111,11 +126,15 @@ async function main() {
 
   const stats = { localCount: 0, proxyCount: 0, orphanedCount: 0, droppedCount: 0, droppedSamples: [] };
 
-  // postUpdates: Post-side writes needed (freshly resolved from legacy strings).
-  const postUpdates = unmigratedPosts.map((doc) => ({
-    id: doc.id,
-    attachments: resolveAttachments(doc.attachments, fileMap, stats),
-  }));
+  // updatesByModel: per-model source-of-truth writes needed (freshly
+  // resolved from legacy strings).
+  const updatesByModel = {};
+  for (const { name } of MODELS) {
+    updatesByModel[name] = unmigratedByModel[name].map((doc) => ({
+      id: doc.id,
+      attachments: resolveAttachments(doc.attachments, fileMap, stats),
+    }));
+  }
 
   console.log(`\nConversions by shape:`);
   console.log(`  file: ids:        ${stats.localCount}`);
@@ -127,34 +146,45 @@ async function main() {
     for (const v of stats.droppedSamples) console.log(`  ${JSON.stringify(v)}`);
   }
 
-  // feedItemUpdates: FeedItems-side writes needed — freshly-converted posts,
-  // plus any stale FeedItems whose Post is already migrated (reuse it as-is,
-  // no need to re-resolve).
-  const feedItemUpdates = new Map(postUpdates.map((u) => [u.id, u.attachments]));
+  // feedItemUpdates: FeedItems-side writes needed — freshly-converted docs
+  // from either model, plus any stale FeedItems whose source doc is already
+  // migrated (reuse it as-is, no need to re-resolve). Matched generically by
+  // id, regardless of objectType — a FeedItems row doesn't care whether its
+  // source was a Post or a Page.
+  const feedItemUpdates = new Map();
+  for (const { name } of MODELS) {
+    for (const u of updatesByModel[name]) feedItemUpdates.set(u.id, u.attachments);
+  }
   const extraIds = staleFeedItems.map((f) => f.id).filter((id) => !feedItemUpdates.has(id));
   if (extraIds.length > 0) {
-    const alreadyMigratedPosts = await Post.find({ id: { $in: extraIds } })
-      .select("id attachments")
-      .lean();
-    for (const p of alreadyMigratedPosts) {
-      feedItemUpdates.set(p.id, p.attachments);
+    for (const { model } of MODELS) {
+      const alreadyMigrated = await model
+        .find({ id: { $in: extraIds } })
+        .select("id attachments")
+        .lean();
+      for (const doc of alreadyMigrated) {
+        feedItemUpdates.set(doc.id, doc.attachments);
+      }
     }
   }
 
+  const totalUpdates = MODELS.reduce((n, { name }) => n + updatesByModel[name].length, 0);
   if (DRY_RUN) {
     console.log(
-      `\n--dry-run: no changes written. Would update ${postUpdates.length} posts and ${feedItemUpdates.size} FeedItems.`
+      `\n--dry-run: no changes written. Would update ${totalUpdates} docs (Post+Page) and ${feedItemUpdates.size} FeedItems.`
     );
     await mongoose.disconnect();
     return;
   }
 
-  if (postUpdates.length > 0) {
-    const ops = postUpdates.map((u) => ({
+  for (const { model, name } of MODELS) {
+    const updates = updatesByModel[name];
+    if (updates.length === 0) continue;
+    const ops = updates.map((u) => ({
       updateOne: { filter: { id: u.id }, update: { $set: { attachments: u.attachments } } },
     }));
-    const result = await Post.bulkWrite(ops, { ordered: false });
-    console.log(`\nUpdated ${result.modifiedCount ?? postUpdates.length} posts.`);
+    const result = await model.bulkWrite(ops, { ordered: false });
+    console.log(`\nUpdated ${result.modifiedCount ?? updates.length} ${name} docs.`);
   }
 
   if (feedItemUpdates.size > 0) {

@@ -5,6 +5,7 @@ import crypto from "crypto";
 import { Settings, User, React } from "./index.js";
 import { getServerSettings } from "#methods/settings/schemaHelpers.js";
 import { linkifyMentions } from "#methods/mentions/linkify.js";
+import AttachmentSchema from "./subschema/Attachment.js";
 
 const ALLOWED_TAGS = [
   "p", "br", "strong", "em", "s", "u", "a", "ul", "ol", "li",
@@ -49,6 +50,12 @@ const ReplySchema = new Schema(
     },
     body: { type: String, default: "" },
     image: { type: String, default: undefined },
+    // Net new field (issue #52) — attachments were never declared on this
+    // schema before, so ActivityParser/handlers/Reply/index.js's
+    // `replyData.attachments = activity.object.attachments` was silently
+    // dropped by Mongoose's default strict mode. Nothing to migrate: no
+    // Reply document has ever actually persisted attachment data.
+    attachments: { type: [AttachmentSchema], default: [] },
 
     reactCount: { type: Number, default: 0 }, // The number of likes to this post
     reactPreview: { type: String, default: null }, // Most-used emoji react

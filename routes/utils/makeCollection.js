@@ -49,10 +49,11 @@ export default function makeCollection({
       model.countDocuments(filter),
     ]);
 
-    const items = docs.map(sanitize);
-
     const domain = getSetting("domain");
     const protocol = req.headers["x-forwarded-proto"] || "https";
+
+    const items = await Promise.all(docs.map((doc) => sanitize(doc, { protocol, req })));
+
     const base = basePath
       ? basePath(req)
       : `${protocol}://${domain}${req.baseUrl}`;

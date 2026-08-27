@@ -19,6 +19,7 @@ import kowloonId from "#methods/parse/kowloonId.js";
 import { getServerSettings } from "#methods/settings/schemaHelpers.js";
 import getMultiFederationTargets from "../utils/getMultiFederationTargets.js";
 import { authorizeInteraction } from "#methods/feed/visibility.js";
+import resolveAttachments from "#methods/files/resolveAttachment.js";
 
 /**
  * Validate Reply activity
@@ -176,7 +177,7 @@ export default async function Reply(activity, ctx = {}) {
     }
 
     if (activity.object.attachments) {
-      replyData.attachments = activity.object.attachments;
+      replyData.attachments = await resolveAttachments(activity.object.attachments);
     }
 
     // 3. Create the Reply

@@ -8,11 +8,12 @@
 // truth, so deletes/edits never need to fan out beyond it.
 
 import route from "../utils/route.js";
-import { Reply } from "#schema";
+import { Reply, Post } from "#schema";
 import { activityStreamsCollection } from "../utils/oc.js";
 import { getSetting } from "#methods/settings/cache.js";
 import kowloonId from "#methods/parse/kowloonId.js";
 import { excludeBlockedMuted } from "#methods/visibility/context.js";
+import { enrichAttachments } from "#methods/files/enrichAttachments.js";
 
 const DEFAULT_LIMIT = 20;
 const MAX_LIMIT = 100;
@@ -30,13 +31,28 @@ async function serveLocal(ctx) {
   const filter = { target: postId, deletedAt: null };
   await excludeBlockedMuted(filter, user?.id);
 
-  const [docs, total] = await Promise.all([
+  const [docs, total, parentPost] = await Promise.all([
     Reply.find(filter).sort({ createdAt: 1 }).skip(skip).limit(limit).lean(),
     Reply.countDocuments(filter),
+    Post.findOne({ id: postId }).select("to").lean(),
   ]);
 
-  const domain = getSetting("domain");
+  // Reply.to is always blank by design — visibility is inherited from the
+  // parent post, so enrichAttachments (which reads item.to to decide
+  // public-vs-restricted) needs the parent's real `to` supplied externally.
   const protocol = req.headers["x-forwarded-proto"] || "https";
+  const enrichTargets = docs.map((doc) => ({
+    image: doc.image,
+    attachments: doc.attachments,
+    to: parentPost?.to || "@public",
+  }));
+  await enrichAttachments(enrichTargets, { protocol });
+  docs.forEach((doc, i) => {
+    doc.featuredImage = enrichTargets[i].featuredImage ?? null;
+    doc.attachments = enrichTargets[i].attachments ?? [];
+  });
+
+  const domain = getSetting("domain");
   const base = `${protocol}://${domain}${req.baseUrl}${req.path}`;
 
   const collection = activityStreamsCollection({

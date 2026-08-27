@@ -5,6 +5,7 @@ import makeCollection from "../utils/makeCollection.js";
 import { Page, FeedItems } from "#schema";
 import { getSetting } from "#methods/settings/cache.js";
 import { getServerActor } from "#methods/settings/schemaHelpers.js";
+import resolveAttachments from "#methods/files/resolveAttachment.js";
 
 const router = express.Router({ mergeParams: true });
 
@@ -92,6 +93,10 @@ router.post(
       // Default visibility to public if not specified
       if (!fields.to) fields.to = "@public";
 
+      if (fields.attachments) {
+        fields.attachments = await resolveAttachments(fields.attachments);
+      }
+
       const page = await Page.create({
         ...fields,
         actorId: serverActorId,
@@ -123,6 +128,9 @@ router.patch(
       }
 
       const fields = pick(body, ALLOWED_FIELDS);
+      if (fields.attachments) {
+        fields.attachments = await resolveAttachments(fields.attachments);
+      }
       Object.assign(page, fields);
       // Clear wordCount/charCount so pre-save hook recalculates them
       page.wordCount = 0;

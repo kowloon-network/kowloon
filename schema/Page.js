@@ -5,6 +5,7 @@ import crypto from "crypto";
 import { Settings, User, Reply, React } from "./index.js";
 import { getServerSettings } from "#methods/settings/schemaHelpers.js";
 import { signAs, verifyAs } from "#methods/utils/signing.js";
+import AttachmentSchema from "./subschema/Attachment.js";
 
 const ALLOWED_TAGS = [
   "p", "br", "strong", "em", "s", "u", "a", "ul", "ol", "li",
@@ -80,7 +81,7 @@ const PageSchema = new Schema(
     reactPreview: { type: String, default: null }, // Most-used emoji react
     shareCount: { type: Number, default: 0 }, // The number of shares of this page
     image: { type: String, default: undefined }, // The page's featured/preview image (File ID or URL for backwards compatibility)
-    attachments: { type: [String], default: [] }, // Array of File IDs
+    attachments: { type: [AttachmentSchema], default: [] }, // Resolved File references, see schema/subschema/Attachment.js
     tags: { type: [String], default: [] },
     to: { type: String, default: "" },
     canReply: { type: String, default: "" },
@@ -99,6 +100,8 @@ PageSchema.index({
   "location.name": "text",
 });
 
+PageSchema.index({ type: 1, "attachments.kind": 1 });
+
 PageSchema.virtual("reacts", {
   ref: "React",
   localField: "id",
@@ -109,12 +112,6 @@ PageSchema.virtual("replies", {
   ref: "Reply",
   localField: "id",
   foreignField: "target",
-});
-
-PageSchema.virtual("attachmentFiles", {
-  ref: "File",
-  localField: "attachments",
-  foreignField: "id",
 });
 
 PageSchema.pre("save", async function (next) {

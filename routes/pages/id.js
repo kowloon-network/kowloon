@@ -7,8 +7,9 @@ import route from "../utils/route.js";
 import { Page } from "#schema";
 import isLocalDomain from "#methods/parse/isLocalDomain.js";
 import { hydrateRemotePage } from "#methods/pages/hydrateRemotePage.js";
+import { enrichAttachments } from "#methods/files/enrichAttachments.js";
 
-export default route(async ({ params, query, set, setStatus }) => {
+export default route(async ({ req, params, query, set, setStatus }) => {
   const idOrSlug = decodeURIComponent(params.id);
   const domain = typeof query?.domain === "string" ? query.domain : null;
 
@@ -35,6 +36,9 @@ export default route(async ({ params, query, set, setStatus }) => {
     set("error", "Page not found");
     return;
   }
+
+  const protocol = req.headers["x-forwarded-proto"] || "https";
+  await enrichAttachments([page], { protocol });
 
   set("item", page);
 });
