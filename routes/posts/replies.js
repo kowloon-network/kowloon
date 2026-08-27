@@ -14,13 +14,26 @@ import { getSetting } from "#methods/settings/cache.js";
 import kowloonId from "#methods/parse/kowloonId.js";
 import { excludeBlockedMuted } from "#methods/visibility/context.js";
 import { enrichAttachments } from "#methods/files/enrichAttachments.js";
+import { authorizeInteraction } from "#methods/feed/visibility.js";
 
 const DEFAULT_LIMIT = 20;
 const MAX_LIMIT = 100;
 
 async function serveLocal(ctx) {
-  const { req, query, user, set } = ctx;
+  const { req, query, user, set, setStatus } = ctx;
   const postId = decodeURIComponent(req.params.id);
+
+  // #58: this previously served any post's replies to anyone who knew/guessed
+  // the id, with zero check against the parent post's own visibility. Same
+  // gate Reply creation already uses (ActivityParser/handlers/Reply/index.js)
+  // — omit `capability` to only check visibility+block, not canReply.
+  const authz = await authorizeInteraction({ actorId: user?.id || null, targetId: postId });
+  if (!authz.ok) {
+    setStatus(authz.status);
+    set("error", authz.message);
+    return;
+  }
+
   const page = Math.max(1, parseInt(query.page, 10) || 1);
   const limit = Math.min(
     Math.max(1, parseInt(query.limit, 10) || DEFAULT_LIMIT),
