@@ -32,6 +32,29 @@ function runFFmpeg(args) {
   })
 }
 
+// ffprobe ships alongside ffmpeg in the same package (apk/apt/brew) — no
+// separate install step needed anywhere ffmpeg is already required.
+function runFFprobe(args) {
+  return new Promise((resolve, reject) => {
+    const proc = spawn('ffprobe', args, { stdio: 'pipe' })
+    const stdout = []
+    const stderr = []
+    proc.stdout.on('data', (d) => stdout.push(d))
+    proc.stderr.on('data', (d) => stderr.push(d))
+    proc.on('error', (err) => {
+      if (err.code === 'ENOENT') {
+        reject(new Error('ffprobe not found on PATH. Install ffmpeg (bundles ffprobe) on the server.'))
+      } else {
+        reject(err)
+      }
+    })
+    proc.on('close', (code) => {
+      if (code === 0) resolve(Buffer.concat(stdout).toString())
+      else reject(new Error(`ffprobe exited ${code}: ${Buffer.concat(stderr).toString().slice(-500)}`))
+    })
+  })
+}
+
 export class LocalProcessor extends BaseProcessor {
   async processVideo(buffer, mimeType) {
     if (!FASTSTART_TYPES.has(mimeType)) return null // already progressive
@@ -78,5 +101,30 @@ export class LocalProcessor extends BaseProcessor {
   // Audio is already progressive in browsers — no processing needed.
   async processAudio(_buffer, _mimeType) {
     return null
+  }
+
+  async probeDimensions(buffer, mimeType) {
+    if (!mimeType.startsWith('video/')) return null
+
+    const id = randomUUID()
+    const input = join(tmpdir(), `kowloon-${id}-probe.mp4`)
+
+    try {
+      await writeFile(input, buffer)
+      const stdout = await runFFprobe([
+        '-v', 'error',
+        '-select_streams', 'v:0',
+        '-show_entries', 'stream=width,height',
+        '-of', 'json',
+        input,
+      ])
+      const stream = JSON.parse(stdout)?.streams?.[0]
+      if (!stream?.width || !stream?.height) return null
+      return { width: stream.width, height: stream.height }
+    } catch (err) {
+      return null
+    } finally {
+      await unlink(input).catch(() => {})
+    }
   }
 }

@@ -8,6 +8,7 @@ import { MediaJob, File, Settings } from '#schema'
 import { loadSettings } from '#methods/settings/cache.js'
 import { getMediaProcessor } from '#methods/media/index.js'
 import { getStorageAdapter } from '#methods/files/index.js'
+import patchAttachmentDimensions from '#methods/files/patchAttachmentDimensions.js'
 import logger from '#methods/utils/logger.js'
 
 const MONGO_URI    = process.env.MONGO_URI || 'mongodb://localhost:27017/kowloon'
@@ -39,6 +40,14 @@ async function runJob(job) {
     processed = await processor.processAudio(buffer, job.mimeType)
   }
 
+  // Probe against the original downloaded buffer, not `processed` — faststart
+  // remuxing doesn't change pixel dimensions, and this lets dimension
+  // extraction happen even when processVideo() returns null (no remux needed).
+  const dims = await processor.probeDimensions(buffer, job.mimeType).catch((err) => {
+    logger.warn('[media-worker] Dimension probe failed', { fileId: job.fileId, error: err.message })
+    return null
+  })
+
   if (processed) {
     // Replace the raw upload with the processed version at the same key
     await storage.replace(job.storageKey, processed, {
@@ -47,11 +56,20 @@ async function runJob(job) {
     })
     await File.findOneAndUpdate(
       { id: job.fileId },
-      { processingStatus: 'ready', size: processed.length }
+      { processingStatus: 'ready', size: processed.length, ...(dims ? { width: dims.width, height: dims.height } : {}) }
     )
   } else {
     // Processor returned null — format needs no processing (already progressive)
-    await File.findOneAndUpdate({ id: job.fileId }, { processingStatus: 'ready' })
+    await File.findOneAndUpdate(
+      { id: job.fileId },
+      { processingStatus: 'ready', ...(dims ? { width: dims.width, height: dims.height } : {}) }
+    )
+  }
+
+  // The post/page that referenced this file was likely created before this
+  // job finished, snapshotting width/height as null — patch it now (#54).
+  if (dims) {
+    await patchAttachmentDimensions(job.fileId, dims)
   }
 }
 

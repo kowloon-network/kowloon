@@ -18,4 +18,13 @@ export class BaseProcessor {
   async processAudio(buffer, mimeType) {
     return null
   }
+
+  // Returns { width, height } for video, or null (no dimensions to report —
+  // e.g. audio, or extraction failed/unsupported). Distinct from
+  // processVideo(): dimension probing never needs to happen for images
+  // (processImage already returns width/height inline) and shouldn't block
+  // the transcode/remux step if it fails.
+  async probeDimensions(buffer, mimeType) {
+    return null
+  }
 }
