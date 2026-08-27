@@ -34,6 +34,16 @@ function sanitizeInvite(invite) {
   };
 }
 
+// Known fields per invite type. A caller sending an unrecognized field name
+// (e.g. a typo'd `amount` instead of `maxRedemptions`) gets a 400 instead of
+// having it silently dropped — for `type: "open"`, a dropped maxRedemptions
+// is indistinguishable from an intentional unlimited invite, which bit the
+// client SDK once already (see issue #46).
+const ALLOWED_FIELDS = {
+  individual: new Set(["type", "email", "expiresAt", "note", "welcomeMessage"]),
+  open: new Set(["type", "maxRedemptions", "expiresAt", "note", "welcomeMessage"]),
+};
+
 // POST /admin/invites — create an individual or open invite
 export const create = route(
   async ({ body, user, set, setStatus }) => {
@@ -45,10 +55,33 @@ export const create = route(
       return;
     }
 
+    const unrecognized = Object.keys(body).filter((k) => !ALLOWED_FIELDS[type].has(k));
+    if (unrecognized.length > 0) {
+      setStatus(400);
+      set("error", `Unrecognized field(s) for type '${type}': ${unrecognized.join(", ")}`);
+      return;
+    }
+
     if (type === "individual" && !email) {
       setStatus(400);
       set("error", "email is required for individual invites");
       return;
+    }
+
+    // maxRedemptions omitted (or null/"") intentionally means unlimited —
+    // that's a real, legitimate choice, not the bug. The bug was a typo'd
+    // field name silently producing the exact same result; the allowlist
+    // check above is what actually closes that. This just rejects a
+    // provided-but-nonsensical value (e.g. 0, negative, non-numeric).
+    let maxRedemptionsValue = null;
+    if (type === "open" && maxRedemptions !== undefined && maxRedemptions !== null && maxRedemptions !== "") {
+      const n = Number(maxRedemptions);
+      if (!Number.isInteger(n) || n < 1) {
+        setStatus(400);
+        set("error", "maxRedemptions must be a positive integer, or omitted for unlimited");
+        return;
+      }
+      maxRedemptionsValue = n;
     }
 
     let invite;
@@ -60,7 +93,7 @@ export const create = route(
       });
     } else {
       invite = await Invite.createOpen(user.id, {
-        maxRedemptions: maxRedemptions ? Number(maxRedemptions) : null,
+        maxRedemptions: maxRedemptionsValue,
         expiresAt: expiresAt ? new Date(expiresAt) : undefined,
         note,
         welcomeMessage,
