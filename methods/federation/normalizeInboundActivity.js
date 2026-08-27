@@ -123,8 +123,20 @@ function normalizeApObject(obj) {
     out.image = out.image.url ?? out.image.href ?? null;
   }
   if (Array.isArray(out.attachment)) {
+    // Real AS2 attachment objects (from a Kowloon peer post-#53, or any AP
+    // server) carry mediaType/name alongside the url — preserve them instead
+    // of discarding everything but the url. resolveAttachments() uses these
+    // as a fallback when the local File record isn't hydrated yet.
     out.attachments = out.attachment
-      .map(a => a?.url ?? a?.href ?? null)
+      .map(a => {
+        const url = a?.url ?? a?.href ?? null;
+        if (!url) return null;
+        return {
+          url,
+          ...(a?.mediaType ? { mediaType: a.mediaType } : {}),
+          ...(a?.name ? { name: a.name } : {}),
+        };
+      })
       .filter(Boolean);
     delete out.attachment;
   }

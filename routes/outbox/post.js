@@ -7,20 +7,45 @@ import createActivity from "#methods/activities/create.js"; // fallback creator
 const isObj = (v) => v && typeof v === "object" && !Array.isArray(v);
 const isNonEmptyStr = (s) => typeof s === "string" && s.trim().length > 0;
 
+// AS2 attachment `type` values, from our internal per-attachment `kind`
+// (schema/subschema/Attachment.js).
+const ATTACHMENT_AS2_TYPE = { photo: "Image", video: "Video", audio: "Audio", file: "Document" };
+
 // Before federating, replace internal file: IDs with public HTTP URLs so remote
-// servers can fetch media without needing access to our internal ID scheme.
+// servers can fetch media without needing access to our internal ID scheme, and
+// emit real AS2 `attachment` objects (not our internal storage shape) so peers
+// get real mediaType/name metadata over the wire (#53).
 function resolveFileIdsForFederation(activity, domain) {
   if (!activity?.object || !domain) return activity;
   const obj = activity.object;
   const toUrl = (id) =>
     id?.startsWith("file:") ? `https://${domain}/files/${encodeURIComponent(id)}` : id;
 
+  const toAS2Attachment = (a) => {
+    // Our internal resolved Attachment subdocument shape.
+    if (a && typeof a === "object" && a.fileId) {
+      const url = toUrl(a.fileId);
+      if (!url) return null;
+      return {
+        type: ATTACHMENT_AS2_TYPE[a.kind] ?? "Document",
+        url,
+        ...(a.mediaType ? { mediaType: a.mediaType } : {}),
+        ...(a.name ? { name: a.name } : {}),
+      };
+    }
+    // Legacy/unmigrated bare fileId or proxy-URL string — no rich metadata available.
+    if (typeof a === "string") {
+      const url = toUrl(a);
+      return url ? { type: "Document", url } : null;
+    }
+    return null;
+  };
+
   const clone = { ...activity, object: { ...obj } };
   if (typeof obj.image === "string") clone.object.image = toUrl(obj.image);
   if (Array.isArray(obj.attachments)) {
-    clone.object.attachments = obj.attachments.map((a) =>
-      typeof a === "string" ? toUrl(a) : a
-    );
+    clone.object.attachment = obj.attachments.map(toAS2Attachment).filter(Boolean);
+    delete clone.object.attachments;
   }
   return clone;
 }

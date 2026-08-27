@@ -27,7 +27,10 @@ function normalizeEntry(raw) {
   if (raw && typeof raw === "object") {
     const fileId = raw.fileId || fileIdFromValue(raw.url) || fileIdFromValue(raw.id);
     if (!fileId) return null;
-    return { fileId, title: raw.title, alt: raw.alt ?? raw.summary };
+    // `name` is the AS2 wire field (normalizeInboundActivity.js); `title` is
+    // the client's create/update shape. mediaType is wire-carried metadata
+    // (#53) — only meaningful as a fallback for a not-yet-hydrated remote file.
+    return { fileId, title: raw.title ?? raw.name, alt: raw.alt ?? raw.summary, mediaType: raw.mediaType };
   }
   return null;
 }
@@ -46,10 +49,11 @@ export async function resolveAttachments(rawAttachments) {
 
   // Unresolved fileId (not yet hydrated for a remote peer, or a race with an
   // in-flight upload) degrades to empty metadata rather than being dropped —
-  // it may resolve on a later read once the File record catches up.
+  // it may resolve on a later read once the File record catches up. Until
+  // then, prefer whatever mediaType the wire itself carried (#53) over blank.
   return entries.map((entry) => {
     const file = fileMap.get(entry.fileId);
-    const mediaType = file?.mediaType ?? "";
+    const mediaType = file?.mediaType || entry.mediaType || "";
     return {
       fileId: entry.fileId,
       mediaType,
