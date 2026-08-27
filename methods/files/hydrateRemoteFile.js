@@ -7,8 +7,9 @@
 // Cross-server posts reference their media as `file:<id>@<remote-domain>`. The
 // receiving server has no File record for those ids, so attachment enrichment
 // dropped them entirely — every federated post with an image / audio / video
-// showed no media (#71). This fetches the origin's public `/files/:id/meta`,
-// upserts a local File shadow, and — once, per file — fetches the actual
+// showed no media (#71). This fetches (and, since issue #45, signs the
+// request to) the origin's `/files/:id/meta`, upserts a local File shadow,
+// and — once, per file — fetches the actual
 // bytes and stores them locally under a `remote-cache/` key prefix (kept
 // separate from real uploads so the GC worker can expire stale cache entries
 // without ever touching user-uploaded content; see methods/gc/index.js).
@@ -19,9 +20,9 @@
 // authorizes us by DOMAIN (does the audience have a member on our domain? —
 // see methods/visibility/domainHasAudienceMember.js), not by local viewer
 // identity. Once cached, WHICH of our own local viewers can see the bytes is
-// gated separately by routes/files/serve.js via FeedFanOut — see that file's
-// canAccessRemoteParent() and its comment for why that's a different
-// mechanism than local files use (issue #57).
+// gated separately by routes/files/serve.js (via methods/files/authorizeFileAccess.js's
+// canAccessRemoteParent()) using FeedFanOut — see that function's comment
+// for why that's a different mechanism than local files use (issue #57).
 
 import { File } from "#schema";
 import kowloonId from "#methods/parse/kowloonId.js";
@@ -82,10 +83,15 @@ export async function hydrateRemoteFile(fileId, { fetcher = fetch } = {}) {
   } else {
     let meta;
     try {
-      const res = await fetcher(
-        `https://${domain}/files/${encodeURIComponent(fileId)}/meta`,
-        { headers: { accept: "application/json" } }
-      );
+      // Signed for the same reason the bytes fetch below is: as of issue
+      // #45, /meta enforces the same authorizeFileAccess() check /files/:id
+      // does (it used to have none at all), so an anonymous request for a
+      // RESTRICTED file's metadata would now 401 without this. Harmless for
+      // public files — authorizeFileAccess() allows those regardless of how
+      // the request is authenticated.
+      const metaUrl = `https://${domain}/files/${encodeURIComponent(fileId)}/meta`;
+      const { headers } = await signHttpRequest({ method: "GET", url: metaUrl });
+      const res = await fetcher(metaUrl, { headers: { ...headers, accept: "application/json" } });
       if (!res.ok) return existing || null;
       const body = await res.json();
       meta = body?.file || body?.item || body;
@@ -108,7 +114,7 @@ export async function hydrateRemoteFile(fileId, { fetcher = fetch } = {}) {
       // restriction (same convention locally); it's only a meaningful
       // fallback for files with no parentObject (avatars, server images).
       // Real local gating for attachment files is via parentObject below +
-      // routes/files/serve.js's canAccessRemoteParent().
+      // methods/files/authorizeFileAccess.js's canAccessRemoteParent().
       to: meta.to || "@public",
       // Propagated from the origin so serve.js knows which (federated) post
       // this belongs to — every attachment File reliably has this set
