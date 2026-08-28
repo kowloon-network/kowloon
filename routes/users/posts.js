@@ -49,6 +49,15 @@ export default route(async ({ req, params, query, user, set }) => {
   };
 
   if (query.type)  filter.type        = query.type;
+  // ?kind=photo|video|audio|file (comma-separated) — e.g. ?type=Media&kind=photo
+  // returns only posts with a photo attachment. Backed by the
+  // {objectType,type,"object.attachments.kind"} FeedItems index.
+  const kinds = query.kind
+    ? String(query.kind).split(",").map((s) => s.trim()).filter(Boolean)
+    : null;
+  if (kinds?.length) {
+    filter["object.attachments.kind"] = { $in: kinds };
+  }
   if (query.since) filter.publishedAt = { $gte: new Date(query.since) };
 
   const page  = Math.max(1, parseInt(query.page,  10) || 1);
@@ -67,7 +76,15 @@ export default route(async ({ req, params, query, user, set }) => {
     FeedItems.countDocuments(filter),
   ]);
 
-  const items = docs.map(feedItemToPost);
+  const items = docs.map((doc) => {
+    const item = feedItemToPost(doc);
+    // When filtering by kind, only show the matching attachment(s) — "show
+    // just the photos", not the photo plus whatever else is on the post.
+    if (kinds?.length && item.attachments?.length) {
+      item.attachments = item.attachments.filter((a) => kinds.includes(a?.kind));
+    }
+    return item;
+  });
 
   const protocol = req.headers["x-forwarded-proto"] || "https";
   // Resolve file:/proxy-URL image + attachments to client URLs + mediaType, so

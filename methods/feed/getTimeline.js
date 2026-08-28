@@ -91,6 +91,7 @@ async function updateMemberFetchedAt(circleId, circle, memberIds) {
  * @param {string} options.viewerId - Required: user requesting timeline
  * @param {string} options.circleId - Required: Circle to view timeline for
  * @param {string[]} [options.types=[]] - Filter by post types (Note, Article, etc.)
+ * @param {string[]} [options.kinds=[]] - Filter by attachment kind (photo, video, audio, file)
  * @param {string|Date} [options.before=null] - Pagination cursor: return items older than this date
  * @param {number} [options.limit=50] - Max results
  *
@@ -100,6 +101,7 @@ export default async function getTimeline({
   viewerId,
   circleId,
   types = [],
+  kinds = [],
   before = null,
   limit = 50,
 } = {}) {
@@ -108,7 +110,7 @@ export default async function getTimeline({
 
   const { domain: ourDomain } = getServerSettings();
 
-  logger.info("getTimeline: Request", { viewerId, circleId, types: types.length, before, limit });
+  logger.info("getTimeline: Request", { viewerId, circleId, types: types.length, kinds: kinds.length, before, limit });
 
   // 1. Get circle (with members including lastFetchedAt)
   const circle = await Circle.findOne({ id: circleId }).lean();
@@ -269,6 +271,14 @@ export default async function getTimeline({
 
   if (types.length > 0) {
     baseQuery.type = { $in: types };
+  }
+
+  // ?kind=photo|video|audio|file (comma-separated) — e.g. ?types=Media&kind=photo
+  // returns only posts with a photo attachment. Same treatment as `types`
+  // above: applied to baseQuery so it flows into both pageQuery (spread below)
+  // and the count query.
+  if (kinds.length > 0) {
+    baseQuery["object.attachments.kind"] = { $in: kinds };
   }
 
   // Pagination: items older than `before` cursor (newest-first feed, scroll backward in time)

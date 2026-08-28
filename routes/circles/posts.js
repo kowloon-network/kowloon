@@ -81,11 +81,27 @@ export default route(async ({ req, params, query, user, set, setStatus }) => {
   const types = query.types
     ? String(query.types).split(",").map((s) => s.trim()).filter(Boolean)
     : [];
+  // ?kind=photo|video|audio|file (comma-separated) — e.g. ?types=Media&kind=photo
+  // returns only posts with a photo attachment. Backed by the
+  // {objectType,type,"object.attachments.kind"} FeedItems index.
+  const kinds = query.kind
+    ? String(query.kind).split(",").map((s) => s.trim()).filter(Boolean)
+    : [];
   const before = query.before || null;
   const limit = Math.min(Number(query.limit) || 50, 500);
 
-  const result = await getTimeline({ viewerId: user.id, circleId, types, before, limit });
+  const result = await getTimeline({ viewerId: user.id, circleId, types, kinds, before, limit });
   const normalized = result.items.map(normalizeFeedItem);
+
+  // When filtering by kind, only show the matching attachment(s) — "show
+  // just the photos", not the photo plus whatever else is on the post.
+  if (kinds.length && normalized.length) {
+    for (const item of normalized) {
+      if (item.attachments?.length) {
+        item.attachments = item.attachments.filter((a) => kinds.includes(a?.kind));
+      }
+    }
+  }
 
   // Resolve `image`/`attachments` via the shared enrichment transform. Items
   // only carry `visibility` (Public/Server/Audience), not a raw `to` — build
