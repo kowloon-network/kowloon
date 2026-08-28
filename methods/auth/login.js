@@ -19,8 +19,16 @@ export default async function login(input, maybePassword = "") {
     return { error: "Missing parameter" };
   }
 
-  // Look up by actor id (id) OR username
-  const query = actorId ? { id: actorId } : { username };
+  // Look up by actor id (id) OR username. Username is only unique PER SERVER
+  // (schema/User.js's compound {username, originDomain} index — two real
+  // users on two different servers can legitimately share a bare username),
+  // so a bare-username lookup must be scoped to local accounts. Without this,
+  // it could non-deterministically match a federated shadow of a remote
+  // user with the same username (a cached actor record with no local
+  // password), throwing a raw bcrypt "Illegal arguments: string, undefined"
+  // when comparing against its undefined password field instead of a clean
+  // "Invalid credentials".
+  const query = actorId ? { id: actorId } : { username, originDomain: getSetting("domain") };
   const userDoc = await User.findOne(query)
     .select(
       "id username type profile prefs publicKey password lastLogin circles emailVerified"

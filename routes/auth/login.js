@@ -1,6 +1,7 @@
 // /routes/auth/login.js
 import route from "../utils/route.js";
 import doLogin from "#methods/auth/login.js";
+import logger from "#methods/utils/logger.js";
 
 const DEV =
   process.env.NODE_ENV === "development" ||
@@ -61,9 +62,15 @@ export default route(
         }
       }
     } catch (err) {
-      // If the auth method actually threw (not just returned {error}), treat as 401
+      // If the auth method actually threw (not just returned {error}), treat
+      // as 401 with the same clean, generic message every other auth-failure
+      // path below already uses — the real error is logged server-side, not
+      // handed to the client (this is what let a raw bcrypt "Illegal
+      // arguments: string, undefined" internals leak straight into the login
+      // form when doLogin() threw instead of returning {error}).
+      logger.warn("AUTH LOGIN: doLogin threw", { error: err?.message });
       setStatus(401);
-      set("error", err?.message || "Invalid credentials");
+      set("error", "Invalid credentials");
       return;
     }
 
