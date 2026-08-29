@@ -216,7 +216,12 @@ router.get(
       if (parsed) {
         const domain = getSetting("domain");
         const protocol = req.headers["x-forwarded-proto"] || "https";
-        if (domain && parsed.hostname === domain) {
+        // The pics.<domain> lens is served by this same app process (see
+        // methods/seo/resolveRequestDomain.js) — treat it as local too, so
+        // e.g. sharing a link to your own pics.kwln.social homepage doesn't
+        // fall through to the external-scrape path below.
+        const isLocal = domain && (parsed.hostname === domain || parsed.hostname === `pics.${domain}`);
+        if (isLocal) {
           // Server avatar — the image fallback for any Kowloon object without
           // its own featured image.
           const serverAvatar = resolveImageUrl(
@@ -273,6 +278,32 @@ router.get(
               return;
             }
           }
+
+          // Anything else on our own domain (the homepage, the pics.<domain>
+          // lens homepage, or any other frontend route) has no server-rendered
+          // OG tags for link-preview-js to find — the SPA only gets a real meta
+          // shell for known bot user-agents (see methods/seo/botDetect.js), and
+          // our own scrape presents as a browser. Same gap as posts/pages
+          // above; fall back to the site profile, mirroring the "/" defaults
+          // methods/seo/meta.js builds for that same bot-detection path.
+          const profile = getSetting("profile") || {};
+          const serverHero =
+            resolveImageUrl(profile.image, domain, protocol) || serverAvatar;
+          set("url", url);
+          set("title", profile.name || fallbackTitle(url));
+          set(
+            "summary",
+            (profile.description || "")
+              .replace(/<[^>]+>/g, " ")
+              .replace(/\s+/g, " ")
+              .trim()
+              .slice(0, 300) || null
+          );
+          set("image", serverHero || null);
+          set("favicon", serverAvatar || null);
+          set("contentType", "text/html");
+          set("queryTime", Date.now() - qStart);
+          return;
         }
       }
 
