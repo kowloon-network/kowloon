@@ -127,6 +127,14 @@ export default async function init(Kowloon, ctx = {}) {
     if (!profileSetting?.value?.name && ctx.siteTitle) {
       updates["value.name"] = ctx.siteTitle;
     }
+    // Heal the old seeded default icon path, which pointed at an asset that
+    // was never actually shipped in the repo (og:image/twitter:image 404'd
+    // on any server that hadn't yet uploaded a custom icon). Only replaces
+    // this exact known-bad value — never touches an admin's own choice,
+    // even another bare relative path.
+    if (profileSetting?.value?.icon === "/images/icons/server.png") {
+      updates["value.icon"] = "/logo.png";
+    }
     if (Object.keys(updates).length) {
       await Settings.updateOne({ name: "profile" }, { $set: updates });
       console.log("Fixed profile setting:", Object.keys(updates).join(", "));

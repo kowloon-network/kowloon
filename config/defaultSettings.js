@@ -71,7 +71,12 @@ const defaultSettings = (ctx) => {
           latitude: "22.332222",
           longitude: "114.190278",
         },
-        icon: "/images/icons/server.png",
+        // /logo.png is a real bundled asset (already the app's own fallback
+        // icon elsewhere, e.g. Header.jsx) — the old default here,
+        // /images/icons/server.png, was never actually shipped anywhere in
+        // the repo, so a fresh install's og:image/twitter:image 404'd until
+        // an admin uploaded a real custom icon.
+        icon: "/logo.png",
         image: "",
         urls: ctx.domain ? [`https://${ctx.domain}`] : [],
       },
