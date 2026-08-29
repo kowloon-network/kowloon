@@ -4,6 +4,7 @@
 
 import { FeedItems, User, Group, Page } from "#schema";
 import { getSetting } from "#methods/settings/cache.js";
+import resolveRequestDomain from "./resolveRequestDomain.js";
 
 function excerpt(html, maxLen = 200) {
   if (!html) return "";
@@ -30,7 +31,7 @@ function resolveImageUrl(fileIdOrUrl, domain, proto) {
 
 // Returns { title, description, image, url, type, jsonLd }
 export async function fetchMeta(pathname, req) {
-  const domain = getSetting("domain") || req.hostname;
+  const domain = resolveRequestDomain(req);
   const profile = getSetting("profile") || {};
   const siteName = profile.name || "Kowloon";
   const proto = req.headers["x-forwarded-proto"] || "https";
