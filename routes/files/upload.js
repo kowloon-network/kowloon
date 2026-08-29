@@ -131,7 +131,11 @@ export default route(
           ? parentObject.trim()
           : undefined,
         originalFileName,
-        name: title || originalFileName,
+        // Deliberately no fallback to originalFileName here — a bare filename
+        // ("IMG_4213.jpg") isn't a caption anyone wants shown as a title; the
+        // original name is already preserved above for anything that needs it
+        // (e.g. download-as). Leave name blank when the uploader didn't type one.
+        name: title || "",
         summary,
         type: getFileType(mimeType),
         mediaType: result.metadata.contentType,
