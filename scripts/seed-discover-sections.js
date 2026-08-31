@@ -7,7 +7,7 @@
 
 import "dotenv/config";
 import mongoose from "mongoose";
-import { RecommendationSection, Settings } from "#schema";
+import { DiscoverySection, Settings } from "#schema";
 import { loadSettings } from "#methods/settings/cache.js";
 
 const CANONICAL = [
@@ -26,7 +26,7 @@ async function main() {
 
   let created = 0, skipped = 0;
   for (const c of CANONICAL) {
-    const existing = await RecommendationSection.findOne({
+    const existing = await DiscoverySection.findOne({
       contentType: c.contentType,
       deletedAt: null,
     }).lean();
@@ -35,7 +35,7 @@ async function main() {
       console.log(`  skip: ${c.contentType} (exists: ${existing.id})`);
       continue;
     }
-    const section = new RecommendationSection({
+    const section = new DiscoverySection({
       name: c.name,
       contentType: c.contentType,
       source: "hybrid",

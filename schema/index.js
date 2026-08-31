@@ -23,8 +23,8 @@ import Server from "./Server.js";
 import FederatedServer from "./FederatedServer.js";
 import Notification from "./Notification.js";
 import Theme from "./Theme.js";
-import RecommendationSection from "./RecommendationSection.js";
-import Recommendation from "./Recommendation.js";
+import DiscoverySection from "./DiscoverySection.js";
+import Discovery from "./Discovery.js";
 import PushToken from "./PushToken.js";
 export {
   Activity,
@@ -52,7 +52,7 @@ export {
   Theme,
   MediaJob,
   BackupJob,
-  RecommendationSection,
-  Recommendation,
+  DiscoverySection,
+  Discovery,
   PushToken,
 };

@@ -1,28 +1,28 @@
-// scripts/seed-recommendations.js
+// scripts/seed-discovery.js
 // Seeds a few Discover shelves from existing public content on this server.
 // Idempotent-ish: skips sections that already exist (by name) and won't
-// re-add a ref that's already recommended in the same section.
+// re-add a ref that's already in the same section.
 //
-//   node scripts/seed-recommendations.js
+//   node scripts/seed-discovery.js
 
 import "dotenv/config";
 import Kowloon, { attachMethodDomains } from "#kowloon";
 import initKowloon from "#methods/utils/init.js";
 import {
-  RecommendationSection,
-  Recommendation,
+  DiscoverySection,
+  Discovery,
   Circle,
   Group,
   Post,
 } from "#schema";
 
 async function ensureSection({ name, summary, order }) {
-  const existing = await RecommendationSection.findOne({ name, deletedAt: null });
+  const existing = await DiscoverySection.findOne({ name, deletedAt: null });
   if (existing) {
     console.log(`  ~ section "${name}" exists (${existing.id})`);
     return existing;
   }
-  const s = await RecommendationSection.create({
+  const s = await DiscoverySection.create({
     name,
     summary,
     order,
@@ -32,14 +32,14 @@ async function ensureSection({ name, summary, order }) {
   return s;
 }
 
-async function addRec(section, ref, note, order) {
-  const dupe = await Recommendation.findOne({
+async function addItem(section, ref, note, order) {
+  const dupe = await Discovery.findOne({
     section: section.id,
     ref,
     deletedAt: null,
   });
   if (dupe) return false;
-  await Recommendation.create({ section: section.id, ref, note, order });
+  await Discovery.create({ section: section.id, ref, note, order });
   return true;
 }
 
@@ -96,7 +96,7 @@ async function main() {
       order: 1,
     });
     let i = 0;
-    for (const c of circles) if (await addRec(s, c.id, null, i++)) added++;
+    for (const c of circles) if (await addItem(s, c.id, null, i++)) added++;
   }
 
   if (groups.length) {
@@ -106,7 +106,7 @@ async function main() {
       order: 2,
     });
     let i = 0;
-    for (const g of groups) if (await addRec(s, g.id, null, i++)) added++;
+    for (const g of groups) if (await addItem(s, g.id, null, i++)) added++;
   }
 
   if (posts.length) {
@@ -116,10 +116,10 @@ async function main() {
       order: 3,
     });
     let i = 0;
-    for (const p of posts) if (await addRec(s, p.id, null, i++)) added++;
+    for (const p of posts) if (await addItem(s, p.id, null, i++)) added++;
   }
 
-  console.log(`\nDone. Added ${added} recommendations.`);
+  console.log(`\nDone. Added ${added} discovery items.`);
   process.exit(0);
 }
 

@@ -124,7 +124,7 @@ async function buildPool(contentType, isLocal, localDomain) {
     // Exclude server-owned circles (actorId === the bare server, e.g. the
     // "KWLN Admins" admin roster and any curated-people circles). Those are
     // admin-managed / internal and must never be auto-surfaced — they appear in
-    // Discover only when EXPLICITLY curated via a Recommendation.
+    // Discover only when EXPLICITLY curated via a Discovery item.
     const docs = await Circle.find({
       type: "Circle",
       deletedAt: null,

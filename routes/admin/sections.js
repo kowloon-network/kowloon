@@ -1,7 +1,7 @@
-// routes/admin/sections.js — Admin CRUD for Discover recommendation shelves.
+// routes/admin/sections.js — Admin CRUD for Discover shelves.
 import express from "express";
 import route from "../utils/route.js";
-import { RecommendationSection, Recommendation } from "#schema";
+import { DiscoverySection, Discovery } from "#schema";
 
 const router = express.Router({ mergeParams: true });
 
@@ -25,7 +25,7 @@ router.get(
       const filter = {};
       if (query.deleted === "true") filter.deletedAt = { $ne: null };
       else if (query.deleted !== "include") filter.deletedAt = null;
-      const sections = await RecommendationSection.find(filter)
+      const sections = await DiscoverySection.find(filter)
         .sort({ order: 1, createdAt: 1 })
         .select("-signature")
         .lean();
@@ -47,7 +47,7 @@ router.post(
       }
       const fields = pick(body, ALLOWED_FIELDS);
       if (!fields.to) fields.to = "@public";
-      const section = await RecommendationSection.create(fields);
+      const section = await DiscoverySection.create(fields);
       setStatus(201);
       set("section", sanitize(section.toObject()));
     },
@@ -61,7 +61,7 @@ router.patch(
   route(
     async ({ params, body, set, setStatus }) => {
       const id = decodeURIComponent(params.id);
-      const section = await RecommendationSection.findOne({ id, deletedAt: null });
+      const section = await DiscoverySection.findOne({ id, deletedAt: null });
       if (!section) {
         setStatus(404);
         set("error", "Section not found");
@@ -77,21 +77,21 @@ router.patch(
 );
 
 // DELETE /admin/sections/:id — soft-delete (default) or ?fullDelete=true.
-// A full delete also removes the shelf's recommendations.
+// A full delete also removes the shelf's discovery items.
 router.delete(
   "/:id",
   route(
     async ({ params, query, user: admin, set, setStatus }) => {
       const id = decodeURIComponent(params.id);
-      const section = await RecommendationSection.findOne({ id });
+      const section = await DiscoverySection.findOne({ id });
       if (!section) {
         setStatus(404);
         set("error", "Section not found");
         return;
       }
       if (query.fullDelete === "true") {
-        await Recommendation.deleteMany({ section: id });
-        await RecommendationSection.deleteOne({ id });
+        await Discovery.deleteMany({ section: id });
+        await DiscoverySection.deleteOne({ id });
         set("ok", true);
         set("hardDeleted", true);
         return;

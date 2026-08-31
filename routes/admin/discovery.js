@@ -1,6 +1,6 @@
-// routes/admin/recommendations.js — Admin CRUD for individual recommendations.
+// routes/admin/discovery.js — Admin CRUD for individual discovery items.
 //
-// Adding a recommendation validates the target: it must be a curatable type
+// Adding a discovery item validates the target: it must be a curatable type
 // (Post/Circle/Group/Bookmark/Page — never a User) and must currently be
 // public or server-visible (you can't surface a private object). The target's
 // tier is snapshotted into `visibility`; the live target stays authoritative
@@ -8,15 +8,15 @@
 import express from "express";
 import route from "../utils/route.js";
 import {
-  Recommendation,
-  RecommendationSection,
+  Discovery,
+  DiscoverySection,
   Post,
   Circle,
   Group,
   Bookmark,
   Page,
 } from "#schema";
-import { refTypeOf } from "#schema/Recommendation.js";
+import { refTypeOf } from "#schema/Discovery.js";
 import { getSetting } from "#methods/settings/cache.js";
 
 const router = express.Router({ mergeParams: true });
@@ -33,7 +33,7 @@ function tierOf(to, domain) {
   return "private";
 }
 
-// GET /admin/recommendations?section=<id>&refType=<Type>
+// GET /admin/discovery?section=<id>&refType=<Type>
 router.get(
   "/",
   route(
@@ -43,17 +43,17 @@ router.get(
       else if (query.deleted !== "include") filter.deletedAt = null;
       if (query.section) filter.section = query.section;
       if (query.refType) filter.refType = query.refType;
-      const recs = await Recommendation.find(filter)
+      const items = await Discovery.find(filter)
         .sort({ section: 1, order: 1, createdAt: 1 })
         .select("-signature")
         .lean();
-      set("recommendations", recs.map(sanitize));
+      set("discoveries", items.map(sanitize));
     },
     { allowUnauth: false }
   )
 );
 
-// POST /admin/recommendations — add one.  Body: { ref, section, note?, order? }
+// POST /admin/discovery — add one.  Body: { ref, section, note?, order? }
 router.post(
   "/",
   route(
@@ -70,12 +70,12 @@ router.post(
         setStatus(400);
         set(
           "error",
-          "ref must be a Post, Circle, Group, Bookmark or Page ID (Users can't be recommended)"
+          "ref must be a Post, Circle, Group, Bookmark or Page ID (Users can't be surfaced)"
         );
         return;
       }
 
-      const sectionDoc = await RecommendationSection.findOne({
+      const sectionDoc = await DiscoverySection.findOne({
         id: section,
         deletedAt: null,
       }).lean();
@@ -99,11 +99,11 @@ router.post(
       const tier = tierOf(target.to, domain);
       if (tier === "private") {
         setStatus(400);
-        set("error", "Only public or server-visible objects can be recommended");
+        set("error", "Only public or server-visible objects can be surfaced");
         return;
       }
 
-      const rec = await Recommendation.create({
+      const item = await Discovery.create({
         ref,
         section,
         note: body.note,
@@ -113,58 +113,58 @@ router.post(
       });
 
       setStatus(201);
-      set("recommendation", sanitize(rec.toObject()));
+      set("discovery", sanitize(item.toObject()));
     },
     { allowUnauth: false }
   )
 );
 
-// PATCH /admin/recommendations/:id — edit note/order/active/section.
+// PATCH /admin/discovery/:id — edit note/order/active/section.
 router.patch(
   "/:id",
   route(
     async ({ params, body, set, setStatus }) => {
       const id = decodeURIComponent(params.id);
-      const rec = await Recommendation.findOne({ id, deletedAt: null });
-      if (!rec) {
+      const item = await Discovery.findOne({ id, deletedAt: null });
+      if (!item) {
         setStatus(404);
-        set("error", "Recommendation not found");
+        set("error", "Discovery item not found");
         return;
       }
       for (const f of ["note", "order", "active", "section"]) {
-        if (f in body) rec[f] = body[f];
+        if (f in body) item[f] = body[f];
       }
-      await rec.save();
+      await item.save();
       set("ok", true);
-      set("recommendation", sanitize(rec.toObject()));
+      set("discovery", sanitize(item.toObject()));
     },
     { allowUnauth: false }
   )
 );
 
-// DELETE /admin/recommendations/:id — soft-delete (default) or ?fullDelete=true.
+// DELETE /admin/discovery/:id — soft-delete (default) or ?fullDelete=true.
 router.delete(
   "/:id",
   route(
     async ({ params, query, user: admin, set, setStatus }) => {
       const id = decodeURIComponent(params.id);
-      const rec = await Recommendation.findOne({ id });
-      if (!rec) {
+      const item = await Discovery.findOne({ id });
+      if (!item) {
         setStatus(404);
-        set("error", "Recommendation not found");
+        set("error", "Discovery item not found");
         return;
       }
       if (query.fullDelete === "true") {
-        await Recommendation.deleteOne({ id });
+        await Discovery.deleteOne({ id });
         set("ok", true);
         set("hardDeleted", true);
         return;
       }
-      rec.deletedAt = new Date();
-      rec.deletedBy = admin?.id || null;
-      await rec.save();
+      item.deletedAt = new Date();
+      item.deletedBy = admin?.id || null;
+      await item.save();
       set("ok", true);
-      set("recommendation", sanitize(rec.toObject()));
+      set("discovery", sanitize(item.toObject()));
     },
     { allowUnauth: false }
   )

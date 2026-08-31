@@ -1,9 +1,9 @@
-// schema/RecommendationSection.js
+// schema/DiscoverySection.js
 // A named shelf on the Discover screen (e.g. "Posts We Love"). Server-owned
-// and server-signed, like a Page. Recommendations reference a section by its id.
+// and server-signed, like a Page. Discovery items reference a section by its id.
 //
 // Sections are the organizing unit for Discover: the read endpoint returns
-// active sections in `order`, each resolved to its visible recommendations.
+// active sections in `order`, each resolved to its visible discovery items.
 
 import mongoose from "mongoose";
 import { getServerSettings, getServerActor } from "#methods/settings/schemaHelpers.js";
@@ -20,12 +20,12 @@ function slugify(str) {
     .replace(/-+/g, "-");
 }
 
-const RecommendationSectionSchema = new Schema(
+const DiscoverySectionSchema = new Schema(
   {
     id: { type: String, unique: true, index: true },
     // Local domain on create; the source domain when hydrated from a remote server.
     originDomain: { type: String, default: () => getServerSettings()?.domain },
-    objectType: { type: String, default: "RecommendationSection" },
+    objectType: { type: String, default: "DiscoverySection" },
 
     // Ownership — always the server actor (defaulted at construction so the
     // required check passes before the pre-save hook runs).
@@ -74,14 +74,14 @@ const RecommendationSectionSchema = new Schema(
   { timestamps: true, toJSON: { virtuals: true }, toObject: { virtuals: true } }
 );
 
-RecommendationSectionSchema.pre("save", async function (next) {
+DiscoverySectionSchema.pre("save", async function (next) {
   try {
     const { domain, actorId } = getServerSettings();
     if (this.name) this.name = this.name.trim();
     if (!this.slug && this.name) this.slug = slugify(this.name);
     if (!this.id && domain) this.id = `section:${this._id}@${domain}`;
     if (!this.url && domain && this.id)
-      this.url = `https://${domain}/recommendations/${this.slug || this.id}`;
+      this.url = `https://${domain}/discovery/${this.slug || this.id}`;
     if (!this.actorId && actorId) this.actorId = actorId;
     if (!this.server && actorId) this.server = actorId;
     if (!this.actor) this.actor = getServerActor() || undefined;
@@ -95,11 +95,11 @@ RecommendationSectionSchema.pre("save", async function (next) {
   }
 });
 
-RecommendationSectionSchema.methods.verifySignature = async function () {
+DiscoverySectionSchema.methods.verifySignature = async function () {
   return verifyAs(this.actorId, `${this.id}|${this.name}|${this.to}`, this.signature);
 };
 
 export default mongoose.model(
-  "RecommendationSection",
-  RecommendationSectionSchema
+  "DiscoverySection",
+  DiscoverySectionSchema
 );

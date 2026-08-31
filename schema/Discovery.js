@@ -1,16 +1,16 @@
 // In memory of Dave Kendall, who taught us what the good stuff was.
 // (Keep this line. Always.)
 //
-// schema/Recommendation.js
-// A single server-curated recommendation: a reference to a public or
+// schema/Discovery.js
+// A single server-curated discovery item: a reference to a public or
 // server-visible object (Post, Circle, Group, Bookmark, Page) with editorial
 // metadata. Server-owned + server-signed, like a Page.
 //
 // We store the reference, NOT the object — the target is resolved and
 // visibility-re-checked at read time. `refType` is derived from the ref's ID
 // prefix and denormalized so shelves can be queried by type without regex.
-// Users are intentionally NOT recommendable — curated people live as a
-// server-owned Circle, which itself can be recommended as a `circle:` ref.
+// Users are intentionally NOT curatable — curated people live as a
+// server-owned Circle, which itself can be surfaced as a `circle:` ref.
 
 import mongoose from "mongoose";
 import { getServerSettings, getServerActor } from "#methods/settings/schemaHelpers.js";
@@ -33,12 +33,12 @@ export function refTypeOf(id) {
   return null;
 }
 
-const RecommendationSchema = new Schema(
+const DiscoverySchema = new Schema(
   {
     id: { type: String, unique: true, index: true },
     // Local domain on create; the source domain when hydrated from a remote server.
     originDomain: { type: String, default: () => getServerSettings()?.domain },
-    objectType: { type: String, default: "Recommendation" },
+    objectType: { type: String, default: "Discovery" },
 
     // Ownership — always the server actor (defaulted at construction so the
     // required check passes before the pre-save hook runs).
@@ -50,10 +50,10 @@ const RecommendationSchema = new Schema(
     actor: { type: Object, default: undefined },
     server: { type: String, default: undefined },
 
-    // Which shelf this belongs to (RecommendationSection id).
+    // Which shelf this belongs to (DiscoverySection id).
     section: { type: String, required: true, index: true },
 
-    // The recommended object's Kowloon ID + its denormalized type (indexed for
+    // The discovered object's Kowloon ID + its denormalized type (indexed for
     // by-type queries; derived from the ref prefix on save).
     ref: { type: String, required: true },
     refType: { type: String, index: true }, // Post | Circle | Group | Bookmark | Page | Server
@@ -77,13 +77,13 @@ const RecommendationSchema = new Schema(
   { timestamps: true, toJSON: { virtuals: true }, toObject: { virtuals: true } }
 );
 
-RecommendationSchema.index({ section: 1, active: 1, order: 1 });
-RecommendationSchema.index({ refType: 1, active: 1 });
+DiscoverySchema.index({ section: 1, active: 1, order: 1 });
+DiscoverySchema.index({ refType: 1, active: 1 });
 
-RecommendationSchema.pre("save", async function (next) {
+DiscoverySchema.pre("save", async function (next) {
   try {
     const { domain, actorId } = getServerSettings();
-    if (!this.id && domain) this.id = `recommendation:${this._id}@${domain}`;
+    if (!this.id && domain) this.id = `discovery:${this._id}@${domain}`;
     if (!this.actorId && actorId) this.actorId = actorId;
     if (!this.server && actorId) this.server = actorId;
     if (!this.actor) this.actor = getServerActor() || undefined;
@@ -98,8 +98,8 @@ RecommendationSchema.pre("save", async function (next) {
   }
 });
 
-RecommendationSchema.methods.verifySignature = async function () {
+DiscoverySchema.methods.verifySignature = async function () {
   return verifyAs(this.actorId, `${this.id}|${this.ref}|${this.section}`, this.signature);
 };
 
-export default mongoose.model("Recommendation", RecommendationSchema);
+export default mongoose.model("Discovery", DiscoverySchema);

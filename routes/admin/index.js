@@ -18,7 +18,7 @@ import bookmarksRouter from "./bookmarks.js";
 import systemRouter from "./system.js";
 import backupRouter from "./backup.js";
 import sectionsRouter from "./sections.js";
-import recommendationsRouter from "./recommendations.js";
+import discoveryRouter from "./discovery.js";
 
 const router = express.Router({ mergeParams: true });
 
@@ -93,6 +93,6 @@ router.use("/bookmarks", bookmarksRouter);
 router.use("/system", systemRouter);
 router.use("/backup", backupRouter);
 router.use("/sections", sectionsRouter);
-router.use("/recommendations", recommendationsRouter);
+router.use("/discovery", discoveryRouter);
 
 export default router;

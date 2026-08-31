@@ -1,19 +1,19 @@
-// routes/recommendations/index.js
-// GET /recommendations — the curated Discover surface.
+// routes/discovery/index.js
+// GET /discovery — the curated Discover surface.
 //
-// Returns active RecommendationSections in order, each resolved to its visible
+// Returns active DiscoverySections in order, each resolved to its visible
 // items. Viewer-aware: authenticated LOCAL users see public + server-tier
 // items; everyone else (logged-out, remote users, other servers) sees public
 // only — the same tiered gate used by /circles and /posts.
 //
-// Recommendations store only a reference, so each target is resolved live here
+// Discovery items store only a reference, so each target is resolved live here
 // and dropped if it was deleted or its visibility narrowed after being curated.
 
 import express from "express";
 import route from "../utils/route.js";
 import {
-  Recommendation,
-  RecommendationSection,
+  Discovery,
+  DiscoverySection,
   Post,
   Circle,
   Group,
@@ -165,7 +165,7 @@ router.get(
       }
 
       // Active sections visible to this viewer, in order.
-      const sections = await RecommendationSection.find({
+      const sections = await DiscoverySection.find({
         deletedAt: null,
         active: true,
       })
@@ -184,7 +184,7 @@ router.get(
       }
 
       const sectionIds = visibleSections.map((s) => s.id);
-      const recs = await Recommendation.find({
+      const recs = await Discovery.find({
         section: { $in: sectionIds },
         deletedAt: null,
         active: true,
