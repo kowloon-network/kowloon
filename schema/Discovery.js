@@ -59,7 +59,7 @@ const DiscoverySchema = new Schema(
     refType: { type: String, index: true }, // Post | Circle | Group | Bookmark | Page | Server
 
     // Editorial metadata
-    note: { type: String, default: undefined }, // "why we picked this" blurb
+    note: { type: String, maxlength: 500, default: undefined }, // "why we picked this" blurb
     order: { type: Number, default: 0 }, // order within the section
     active: { type: Boolean, default: true }, // curator's show/hide toggle
 
