@@ -69,7 +69,16 @@ const UserSchemaDef = {
     // "admin" for server admins. String so new screens can be added later.
     defaultHomeScreen: { type: String, default: "discover" },
     lang: { type: String, default: "en" },
-    theme: { type: String, default: "system" },
+    // No default on purpose: unset means "inherit the server's default theme"
+    // (the admin's site branding, or Auto if the admin hasn't set one) —
+    // "system" is a real, distinct explicit choice a user can make (the
+    // Auto option), not the same as "hasn't picked anything yet". A schema
+    // default here would make every never-touched account indistinguishable
+    // from one that deliberately chose Auto, permanently hiding the site
+    // theme from them. Existing accounts already stamped with the old
+    // "system" default are left as-is — no way to tell whether that was a
+    // real choice, so it's not worth guessing.
+    theme: { type: String },
     notifications: {
       reply: { type: Boolean, default: true },
       react: { type: Boolean, default: true },
