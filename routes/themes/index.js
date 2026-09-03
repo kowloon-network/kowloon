@@ -107,13 +107,23 @@ const BUILT_IN_THEMES = [
   },
 ];
 
-// Seed built-in themes once on startup
+// Seed built-in themes on every startup, overwriting existing docs.
+//
+// This MUST be $set, not $setOnInsert: built-in themes can't be edited via
+// the API (isBuiltIn is checked on every write route below), so BUILT_IN_THEMES
+// above is their only source of truth, and any server that already had these
+// docs from before a code change would otherwise keep serving stale content
+// forever. That already happened once — kowloon-light/kowloon-dark shipped
+// with hand-tuned OKLCH colors, then a1ea9fd9 (2026-08-10) switched them to a
+// literal hex copy of palette.json to stop them drifting from the app, but
+// every server seeded before that commit silently kept the old OKLCH values
+// (setOnInsert never touches an existing doc), invisibly undoing the fix.
 async function seedBuiltInThemes() {
   try {
     for (const themeData of BUILT_IN_THEMES) {
       await Theme.updateOne(
         { id: themeData.id },
-        { $setOnInsert: themeData },
+        { $set: themeData },
         { upsert: true }
       );
     }
