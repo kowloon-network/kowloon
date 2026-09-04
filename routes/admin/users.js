@@ -18,6 +18,16 @@ router.get(
     model: User,
     buildQuery: (req, { query }) => {
       const filter = {};
+      // Local users only by default -- remote actors cached here through
+      // federation (e.g. a local user adding @jzellis@kwln.city to a circle)
+      // get their own User doc with originDomain set to the REMOTE domain
+      // (see methods/core/getObjectById.js), not this server's. This admin
+      // page is for managing accounts that live on THIS server (deactivate,
+      // restore, roles -- none of which make sense for a remote account)
+      // -- pass ?origin=all to include cached remote actors too.
+      if (query.origin !== "all") {
+        filter.originDomain = getSetting("domain");
+      }
       if (query.active !== undefined) filter.active = query.active !== "false";
       if (query.deleted === "true") {
         filter.deletedAt = { $ne: null };
