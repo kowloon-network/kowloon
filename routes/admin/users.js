@@ -24,6 +24,15 @@ router.get(
       } else if (query.deleted !== "include") {
         filter.deletedAt = null;
       }
+      // Regex substring match, not $text -- $text is word-tokenised and won't
+      // match partial words like "jzell" against "jzellis" (same reasoning as
+      // routes/search/index.js's own User search). Matches display name,
+      // username, and the full "@username@domain" id.
+      const term = query.search?.trim();
+      if (term) {
+        const re = new RegExp(term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
+        filter.$or = [{ "profile.name": re }, { username: re }, { id: re }];
+      }
       return filter;
     },
     select: "-password -privateKey -publicKeyJwk -signature",
