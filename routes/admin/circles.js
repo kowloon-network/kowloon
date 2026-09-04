@@ -53,7 +53,16 @@ router.get(
       if (query.actorId) filter.actorId = query.actorId;
       // ?server=true — only server-owned circles
       if (query.server === "true") filter.actorId = getServerActorId();
-      if (query.to) filter.to = query.to;
+      if (query.to) {
+        filter.to = query.to;
+      } else if (query.visibility !== "all") {
+        // Admin sees public/server circles by default; pass ?visibility=all for private ones too.
+        // Without this, every user's private System circles addressed to themselves (e.g. "Following" --
+        // type "Circle", not "System", so the type filter above doesn't catch it -- see schema/User.js)
+        // showed up in this list.
+        const domain = getSetting("domain");
+        filter.to = { $in: ["@public", `@${domain}`] };
+      }
       if (query.deleted === "true") {
         filter.deletedAt = { $ne: null };
       } else if (query.deleted !== "include") {

@@ -39,9 +39,13 @@ router.get(
     model: Post,
     buildQuery: (req, { query }) => {
       const filter = {};
-      // Admin sees all public/server posts by default; pass ?visibility=all for circle posts too
+      // Admin sees all public/server posts by default; pass ?visibility=all for circle/private posts too.
+      // "@server" was never a real Post.to value (canonical server-wide posts are "@<domain>" -- see
+      // methods/parse/canonicalTo.js) -- this filter was silently excluding real server-wide posts too,
+      // not just the private circle/user ones it was meant to hide.
       if (query.visibility !== "all") {
-        filter.to = { $in: ["@public", "@server"] };
+        const domain = getSetting("domain");
+        filter.to = { $in: ["@public", `@${domain}`] };
       }
       if (query.type) filter.type = query.type;
       if (query.actorId) filter.actorId = query.actorId;
