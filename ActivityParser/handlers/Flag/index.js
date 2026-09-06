@@ -32,17 +32,28 @@ export default async function FlagHandler(activity) {
     }
 
     // ---- Identify target & federation signal ----
-    const targetDoc = await getObjectById(activity.target); // null if remote/unknown
+    // getObjectById returns { object, source, visibility, cached }, not the
+    // raw document -- targetDoc.actorId/.objectType/.type were always
+    // undefined (wrong property path), so targetActorId has never actually
+    // been populated on any flag. targetType happened to still come out
+    // right by accident, via the kowloonId(...) fallback below.
+    let targetDoc = null;
+    try {
+      targetDoc = await getObjectById(activity.target);
+    } catch {
+      targetDoc = null; // not found / remote / not visible -- fall through
+    }
+    const targetObject = targetDoc?.object;
     const parsedTarget = kowloonId(activity.target);
     const ourDomain = await getOurDomain();
 
     const targetType =
-      targetDoc?.objectType ||
-      targetDoc?.type ||
+      targetObject?.objectType ||
+      targetObject?.type ||
       (parsedTarget?.type && capitalize(parsedTarget.type)) ||
       undefined;
 
-    const targetActorId = targetDoc?.actorId || undefined;
+    const targetActorId = targetObject?.actorId || undefined;
 
     const isTargetRemote =
       !targetDoc ||
