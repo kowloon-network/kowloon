@@ -25,6 +25,7 @@ const notificationSchema = new mongoose.Schema(
         "mention", // Someone tagged you (@handle) in a post or reply (opt-in via prefs)
         "join_request", // Someone requested to join your group
         "join_approved", // Your join request was approved
+        "moderation", // A flag you reported was resolved, or your content was moderated
       ],
       index: true,
     },
