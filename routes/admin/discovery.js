@@ -15,12 +15,49 @@ import {
   Group,
   Bookmark,
   Page,
+  FederatedServer,
 } from "#schema";
 import { refTypeOf } from "#schema/Discovery.js";
 import { getSetting } from "#methods/settings/cache.js";
 
 const router = express.Router({ mergeParams: true });
 const MODELS = { Post, Circle, Group, Bookmark, Page };
+const PREVIEW_FIELDS = "id title name summary description image icon featuredImage deletedAt";
+
+// Discovery only stores a `ref` id, so the raw list is useless for a
+// management UI (an admin can't tell "post:6a98cde4f...@x" from a real
+// title) -- batch-resolve each item's target into a small preview object.
+// `target: null` means the object was hard-deleted after being curated (the
+// public /discovery route already drops those at read time; here we still
+// want to SHOW the orphaned row so the admin can clean it up, not hide it).
+async function attachPreviews(items) {
+  const byType = {};
+  for (const item of items) {
+    if (!item.refType) continue;
+    (byType[item.refType] ??= new Set()).add(item.ref);
+  }
+
+  const targets = {};
+  await Promise.all(
+    Object.entries(byType).map(async ([refType, refSet]) => {
+      const refs = [...refSet];
+      if (refType === "Server") {
+        const domains = refs.map((r) => r.replace(/^@/, ""));
+        const docs = await FederatedServer.find({ domain: { $in: domains } })
+          .select("domain name icon")
+          .lean();
+        for (const d of docs) targets[`@${d.domain}`] = { name: d.name, icon: d.icon };
+        return;
+      }
+      const model = MODELS[refType];
+      if (!model) return;
+      const docs = await model.find({ id: { $in: refs } }).select(PREVIEW_FIELDS).lean();
+      for (const d of docs) targets[d.id] = d;
+    })
+  );
+
+  return items.map((item) => ({ ...item, target: targets[item.ref] ?? null }));
+}
 
 function sanitize(doc) {
   const { _id, __v, signature, ...rest } = doc;
@@ -47,7 +84,8 @@ router.get(
         .sort({ section: 1, order: 1, createdAt: 1 })
         .select("-signature")
         .lean();
-      set("discoveries", items.map(sanitize));
+      const withPreviews = await attachPreviews(items.map(sanitize));
+      set("discoveries", withPreviews);
     },
     { allowUnauth: false }
   )
@@ -162,6 +200,28 @@ router.delete(
       }
       item.deletedAt = new Date();
       item.deletedBy = admin?.id || null;
+      await item.save();
+      set("ok", true);
+      set("discovery", sanitize(item.toObject()));
+    },
+    { allowUnauth: false }
+  )
+);
+
+// POST /admin/discovery/:id/restore
+router.post(
+  "/:id/restore",
+  route(
+    async ({ params, set, setStatus }) => {
+      const id = decodeURIComponent(params.id);
+      const item = await Discovery.findOne({ id });
+      if (!item) {
+        setStatus(404);
+        set("error", "Discovery item not found");
+        return;
+      }
+      item.deletedAt = null;
+      item.deletedBy = null;
       await item.save();
       set("ok", true);
       set("discovery", sanitize(item.toObject()));
