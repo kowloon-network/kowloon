@@ -4,7 +4,7 @@ import os from "os";
 import { statfs, open as fsOpen, stat as fsStat } from "fs/promises";
 import mongoose from "mongoose";
 import route from "../utils/route.js";
-import { Activity, Circle, Flag, Group, Invite, Page, Post, Reply, React, User } from "#schema";
+import { Activity, Circle, File, Flag, Group, Invite, Page, Post, Reply, React, User } from "#schema";
 import getSettings from "#methods/settings/get.js";
 import { LOG_FILE } from "#methods/utils/logger.js";
 
@@ -36,6 +36,32 @@ router.get(
         Flag.countDocuments({ status: "open" }),
         Invite.countDocuments({ active: true, deletedAt: null }),
       ]);
+
+      // Calendar-boundary "since" cutoffs (UTC) for the at-a-glance activity
+      // row -- "this week" starts Monday, not a rolling 7 days.
+      const now = new Date();
+      const startOfDay = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+      const startOfWeek = new Date(startOfDay);
+      startOfWeek.setUTCDate(startOfDay.getUTCDate() - ((startOfDay.getUTCDay() + 6) % 7));
+      const startOfMonth = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
+      const startOfYear = new Date(Date.UTC(now.getUTCFullYear(), 0, 1));
+
+      const [postsToday, newUsersWeek, newUsersMonth, newUsersYear, inviteUsageAgg, fileAgg] =
+        await Promise.all([
+          Post.countDocuments({ deletedAt: null, createdAt: { $gte: startOfDay } }),
+          User.countDocuments({ deletedAt: null, createdAt: { $gte: startOfWeek } }),
+          User.countDocuments({ deletedAt: null, createdAt: { $gte: startOfMonth } }),
+          User.countDocuments({ deletedAt: null, createdAt: { $gte: startOfYear } }),
+          Invite.aggregate([{ $group: { _id: null, used: { $sum: "$redemptionCount" } } }]),
+          File.aggregate([
+            { $match: { deletedAt: null } },
+            { $group: { _id: "$type", count: { $sum: 1 }, sizeBytes: { $sum: "$size" } } },
+          ]),
+        ]);
+
+      const mediaByType = Object.fromEntries(
+        fileAgg.map((g) => [g._id || "Other", { count: g.count, sizeBytes: g.sizeBytes || 0 }])
+      );
 
       // Disk stats for the process working directory
       let disk = null;
@@ -74,6 +100,25 @@ router.get(
         activities: activityCount,
         openFlags: flagCount,
         activeInvites: inviteCount,
+      });
+
+      set("activity", {
+        postsToday,
+        newUsersWeek,
+        newUsersMonth,
+        newUsersYear,
+        invitesUsed: inviteUsageAgg[0]?.used ?? 0,
+      });
+
+      set("media", {
+        totalFiles: Object.values(mediaByType).reduce((sum, g) => sum + g.count, 0),
+        totalSizeKb: Math.round(
+          Object.values(mediaByType).reduce((sum, g) => sum + g.sizeBytes, 0) / 1024
+        ),
+        photos: mediaByType.Image?.count ?? 0,
+        videos: mediaByType.Video?.count ?? 0,
+        audio: mediaByType.Audio?.count ?? 0,
+        documents: mediaByType.Document?.count ?? 0,
       });
 
       set("server", {
