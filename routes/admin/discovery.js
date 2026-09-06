@@ -123,22 +123,48 @@ router.post(
         return;
       }
 
-      // Confirm the target exists and is public/server-visible.
-      const target = await MODELS[refType]
-        .findOne({ id: ref, deletedAt: null })
-        .select("id to")
-        .lean();
-      if (!target) {
-        setStatus(404);
-        set("error", "Target object not found on this server");
-        return;
-      }
-      const domain = getSetting("domain");
-      const tier = tierOf(target.to, domain);
-      if (tier === "private") {
-        setStatus(400);
-        set("error", "Only public or server-visible objects can be surfaced");
-        return;
+      // Servers aren't a local Kowloon model -- they're resolved from the
+      // FederatedServer cache by domain (see schema/Discovery.js's own
+      // comment: "always public"), so they skip the to/tier check entirely.
+      // MODELS has no "Server" entry -- this branch used to fall through to
+      // MODELS[refType].findOne(...) with refType "Server", i.e. calling
+      // .findOne on undefined, a guaranteed 500. There was never actually a
+      // way to add a Server to Discovery before this.
+      let tier = "public";
+      if (refType === "Server") {
+        const domain = ref.replace(/^@/, "");
+        const target = await FederatedServer.findOne({ domain }).lean();
+        if (!target) {
+          setStatus(404);
+          set(
+            "error",
+            "This server isn't known to this Kowloon instance yet -- it needs to have been discovered (e.g. via a search or a federated interaction) before it can be curated."
+          );
+          return;
+        }
+        if (["blocked", "suspended"].includes(target.status)) {
+          setStatus(400);
+          set("error", "This server is blocked or suspended and can't be surfaced.");
+          return;
+        }
+      } else {
+        // Confirm the target exists and is public/server-visible.
+        const target = await MODELS[refType]
+          .findOne({ id: ref, deletedAt: null })
+          .select("id to")
+          .lean();
+        if (!target) {
+          setStatus(404);
+          set("error", "Target object not found on this server");
+          return;
+        }
+        const domain = getSetting("domain");
+        tier = tierOf(target.to, domain);
+        if (tier === "private") {
+          setStatus(400);
+          set("error", "Only public or server-visible objects can be surfaced");
+          return;
+        }
       }
 
       const item = await Discovery.create({
