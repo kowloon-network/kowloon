@@ -38,13 +38,30 @@ async function getTransport() {
 
 export async function sendEmail({ to, subject, html, text }) {
   const domain = getSetting("domain") || "localhost";
-  const adminEmail = getSetting("adminEmail") || `noreply@${domain}`;
   const siteName = getSetting("profile")?.name || "Kowloon";
+  const cfg = getSetting("emailServer") || {};
 
   const { transport, preview } = await getTransport();
 
+  // The From address has to be one the SMTP relay is actually authorized to
+  // send as -- Mailgun (like most relays) DKIM/SPF-signs for its own
+  // authenticated account's domain, not whatever adminEmail happens to be.
+  // adminEmail is a personal contact address (cert-expiry warnings etc.),
+  // not necessarily on a domain Mailgun has any authority over -- using it
+  // as From made every server email look exactly like a spoofed message
+  // (visible From domain != the domain that actually sent it) and land in
+  // spam. Prefer an explicit override (emailServer.from), then the SMTP
+  // login itself (always deliverable, since it's the authenticated
+  // account), then fall back to adminEmail only for the Ethereal/dev case
+  // where real deliverability doesn't matter.
+  const fromAddress =
+    cfg.from ||
+    (!preview && cfg.username) ||
+    getSetting("adminEmail") ||
+    `noreply@${domain}`;
+
   const info = await transport.sendMail({
-    from: `"${siteName}" <${adminEmail}>`,
+    from: `"${siteName}" <${fromAddress}>`,
     to,
     subject,
     html,

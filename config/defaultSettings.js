@@ -240,6 +240,15 @@ const defaultSettings = (ctx) => {
         port: ctx.smtpPort || 587,
         username: ctx.smtpUser || "",
         password: ctx.smtpPass || "",
+        // Optional: the address outgoing mail is sent From. Left blank,
+        // sendEmail() falls back to `username` (the SMTP login), which is
+        // always deliverable since it's the address the relay actually
+        // authenticates as. Only set this to something else if that other
+        // address is also authorized to send through this SMTP account
+        // (e.g. another verified address on the same Mailgun domain) --
+        // otherwise mail lands in spam (From domain won't match the
+        // relay's DKIM/SPF-signing domain).
+        from: "",
       },
       summary: "Outbound SMTP email server configuration.",
       to: "@admin",
