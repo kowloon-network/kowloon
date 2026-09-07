@@ -62,6 +62,18 @@ function isCreateUserActivity(body) {
   return typeof ot === "string" && /^(User|Person)$/i.test(ot);
 }
 
+// What a cross-server visiting session (methods/oauth/tokens.js's
+// scope: "visiting" access token) is actually allowed to do — matches what
+// the consent screen tells the user they're granting (reply/react/post),
+// not full account access. Everything else (profile edits, deletes,
+// circle/group management, blocks, ...) is refused outright.
+function isAllowedVisitingActivity(body) {
+  if (!isObj(body)) return false;
+  if (body.type === "Reply" || body.type === "React") return true;
+  if (body.type === "Create" && body.objectType === "Post") return true;
+  return false;
+}
+
 function pickCreateFn() {
   const viaKowloon = Kowloon?.activities?.create;
   return typeof viaKowloon === "function" ? viaKowloon : createActivity;
@@ -74,6 +86,20 @@ export default route(
     console.time(label);
 
     const unauthCreateUser = isCreateUserActivity(body);
+
+    // Cross-server access token presented directly (this server is the
+    // user's actual home server, receiving either a proxied write from a
+    // foreign server or a direct call using the token). Enforced here, not
+    // just trusted from the proxying side, since this is the authoritative
+    // server for the account — a modified consumer or a direct API call
+    // must not be able to exceed this either.
+    if (user?.scope === "visiting" && !isAllowedVisitingActivity(body)) {
+      setStatus(403);
+      set("error", "This action isn't available for a visiting session");
+      if (DEV) console.warn(`${label}: 403 visiting scope refused`, { type: body?.type, objectType: body?.objectType });
+      console.timeEnd(label);
+      return;
+    }
 
     // Visiting identity (see routes/oauth/exchange.js): this browser is
     // authenticated as a foreign user cross-logged-in via OAuth, not a local

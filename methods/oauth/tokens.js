@@ -20,7 +20,14 @@ async function getSigningKey(settings) {
 // Access token: proves "this user, on their home server, authorized this
 // specific foreign domain to act as them." Verified by the foreign domain
 // via this server's JWKS (sub/iss/aud/exp all checked — see
-// methods/auth/verifyUserJwt.js).
+// methods/auth/verifyUserJwt.js). scope: "visiting" is read by this SAME
+// server's own /outbox route (routes/outbox/post.js) when the proxied
+// activity finally lands back here under real local authority — it caps
+// what a cross-server session can do to the interaction-shaped actions the
+// consent screen actually described (reply/react/post), not full account
+// access. Nested inside `user`, not a sibling claim, so it survives
+// unchanged through routes/utils/route.js's attachUserFromToken, which sets
+// req.user = payload.user verbatim.
 export async function mintAccessToken({ user, clientDomain }) {
   const settings = await getSettings();
   const { pk, kid } = await getSigningKey(settings);
@@ -30,6 +37,7 @@ export async function mintAccessToken({ user, clientDomain }) {
       id: user.id,
       username: user.username,
       profile: user.profile,
+      scope: "visiting",
     },
   })
     .setProtectedHeader({ alg: "RS256", kid })
