@@ -4,6 +4,7 @@ import Kowloon from "#kowloon";
 import getSettings from "#methods/settings/get.js";
 import createActivity from "#methods/activities/create.js"; // fallback creator
 import proxyOutbox from "#methods/oauth/proxyOutbox.js";
+import { isDomainBlockedByUser } from "#methods/oauth/tokens.js";
 
 const isObj = (v) => v && typeof v === "object" && !Array.isArray(v);
 const isNonEmptyStr = (s) => typeof s === "string" && s.trim().length > 0;
@@ -99,6 +100,22 @@ export default route(
       if (DEV) console.warn(`${label}: 403 visiting scope refused`, { type: body?.type, objectType: body?.objectType });
       console.timeEnd(label);
       return;
+    }
+
+    // Same access token, checked against the CURRENT block list rather than
+    // only at grant time — blocking a domain (ServerMoreMenu.jsx's "Block
+    // Server", a bare "@domain" entry in the user's own Blocked circle) has
+    // to cut off an already-issued, not-yet-expired access token immediately,
+    // not just stop future renewal (that half is revokeGrantsForDomain, run
+    // when the block is created — see ActivityParser/handlers/Add/index.js).
+    if (user?.scope === "visiting" && user?.clientDomain) {
+      const domainBlocked = await isDomainBlockedByUser(user.id, user.clientDomain);
+      if (domainBlocked) {
+        setStatus(403);
+        set("error", "This domain has been blocked");
+        console.timeEnd(label);
+        return;
+      }
     }
 
     // Visiting identity (see routes/oauth/exchange.js): this browser is

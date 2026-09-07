@@ -11,6 +11,7 @@ import pullFromRemote from "#methods/federation/pullFromRemote.js";
 import fetchRemoteServerProfile from "#methods/federation/fetchRemoteServerProfile.js";
 import { getServerActor } from "#methods/settings/schemaHelpers.js";
 import regenerateCircleIcon from "#methods/circles/regenerateCircleIcon.js";
+import { revokeGrantsForDomain } from "#methods/oauth/tokens.js";
 
 export default async function Add(activity) {
   try {
@@ -326,6 +327,19 @@ export default async function Add(activity) {
       const owner = await User.findOne({ id: ownerId }).select("circles.blocked circles.muted").lean();
       isSuppressedCircle =
         activity.target === owner?.circles?.blocked || activity.target === owner?.circles?.muted;
+
+      // Blocking a whole server (bare "@domain" added to your own Blocked
+      // circle — see ServerMoreMenu.jsx) also cuts off any OAuth grant
+      // you've given that domain to act as you (see methods/oauth/tokens.js).
+      // Muting doesn't — mute is a read-side filter, not a trust decision.
+      if (activity.target === owner?.circles?.blocked) {
+        const blockedDomains = remoteMembers
+          .filter((m) => /^@[^@]+$/.test(m.id))
+          .map((m) => m.id.slice(1));
+        for (const domain of blockedDomains) {
+          revokeGrantsForDomain({ userId: activity.actorId, clientDomain: domain }).catch(() => {});
+        }
+      }
     }
     if (ownerType === "User" && remoteMembers.length > 0 && !isSuppressedCircle) {
       const since = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);

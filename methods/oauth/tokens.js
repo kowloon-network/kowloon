@@ -6,7 +6,7 @@
 import crypto from "crypto";
 import { SignJWT, importPKCS8 } from "jose";
 import getSettings from "#methods/settings/get.js";
-import { OAuthRefreshToken } from "#schema";
+import { OAuthRefreshToken, Circle, User } from "#schema";
 
 const ACCESS_TOKEN_TTL_SECONDS = 60 * 60; // 1h
 const REFRESH_TOKEN_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30d
@@ -38,6 +38,11 @@ export async function mintAccessToken({ user, clientDomain }) {
       username: user.username,
       profile: user.profile,
       scope: "visiting",
+      // Carried so /outbox can check "has this user blocked the domain this
+      // token was issued to" on every request, not just at grant time —
+      // req.user only ever sees payload.user (attachUserFromToken), never
+      // the token's own `aud` claim, so this has to live here too.
+      clientDomain,
     },
   })
     .setProtectedHeader({ alg: "RS256", kid })
@@ -108,6 +113,57 @@ export async function consumeRefreshToken({ rawToken, clientDomain }) {
   row.revokedAt = new Date();
   await row.save();
   return { userId: row.userId, clientDomain: row.clientDomain };
+}
+
+// Active (non-revoked, non-expired) grants a user has given out, one row
+// per foreign domain (most recent if a domain somehow has more than one —
+// rotation should always leave at most one live row per domain, but this
+// doesn't assume that invariant holds).
+export async function listActiveGrants({ userId }) {
+  const rows = await OAuthRefreshToken.find({
+    userId,
+    revokedAt: null,
+    expiresAt: { $gt: new Date() },
+  })
+    .sort({ createdAt: -1 })
+    .lean();
+
+  const byDomain = new Map();
+  for (const row of rows) {
+    if (!byDomain.has(row.clientDomain)) {
+      byDomain.set(row.clientDomain, { clientDomain: row.clientDomain, grantedAt: row.createdAt, expiresAt: row.expiresAt });
+    }
+  }
+  return [...byDomain.values()];
+}
+
+// Revokes every live refresh token a user has granted to a given domain —
+// stops future renewal. Any access token already issued still runs out
+// naturally within ACCESS_TOKEN_TTL_SECONDS; isDomainBlockedByUser below is
+// what gives an actual block immediate effect, not this alone.
+export async function revokeGrantsForDomain({ userId, clientDomain }) {
+  const res = await OAuthRefreshToken.updateMany(
+    { userId, clientDomain, revokedAt: null },
+    { revokedAt: new Date() }
+  );
+  return res.modifiedCount || 0;
+}
+
+// Checked on every /outbox request from a scope:"visiting" access token
+// (routes/outbox/post.js) — catches a domain blocked AFTER the token was
+// issued, without waiting for it to expire. Bare "@domain" is the same
+// server-block shorthand ServerMoreMenu.jsx already writes via addToCircle.
+export async function isDomainBlockedByUser(userId, domain) {
+  if (!userId || !domain) return false;
+  const owner = await User.findOne({ id: userId }).select("circles.blocked").lean();
+  if (!owner?.circles?.blocked) return false;
+  const hit = await Circle.findOne({
+    id: owner.circles.blocked,
+    "members.id": `@${domain}`,
+  })
+    .select("_id")
+    .lean();
+  return !!hit;
 }
 
 export const ACCESS_TOKEN_TTL = ACCESS_TOKEN_TTL_SECONDS;
