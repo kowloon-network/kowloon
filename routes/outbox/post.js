@@ -3,6 +3,7 @@ import route from "../utils/route.js";
 import Kowloon from "#kowloon";
 import getSettings from "#methods/settings/get.js";
 import createActivity from "#methods/activities/create.js"; // fallback creator
+import proxyOutbox from "#methods/oauth/proxyOutbox.js";
 
 const isObj = (v) => v && typeof v === "object" && !Array.isArray(v);
 const isNonEmptyStr = (s) => typeof s === "string" && s.trim().length > 0;
@@ -73,6 +74,20 @@ export default route(
     console.time(label);
 
     const unauthCreateUser = isCreateUserActivity(body);
+
+    // Visiting identity (see routes/oauth/exchange.js): this browser is
+    // authenticated as a foreign user cross-logged-in via OAuth, not a local
+    // account. The write must happen on their actual home server under their
+    // real local authority, not here — proxy it server-to-server and relay
+    // the response verbatim rather than running the local pipeline below.
+    if (user?.visiting && user?.sessionId) {
+      const result = await proxyOutbox({ sessionId: user.sessionId, activity: body });
+      setStatus(result.status);
+      for (const [k, v] of Object.entries(result.body || {})) set(k, v);
+      if (DEV) console.log(`${label}: proxied for visiting identity`, { status: result.status });
+      console.timeEnd(label);
+      return;
+    }
 
     // ---- settings for server actor ----
     const settings = await getSettings().catch(() => ({}));

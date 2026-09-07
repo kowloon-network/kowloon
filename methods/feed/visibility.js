@@ -7,6 +7,7 @@ import { getServerSettings } from "#methods/settings/schemaHelpers.js";
 import logger from "#methods/utils/logger.js";
 import { getViewerContext, getExclusionSets, domainOf } from "#methods/visibility/context.js";
 import { canInteract } from "#methods/visibility/helpers.js";
+import kowloonId from "#methods/parse/kowloonId.js";
 
 const CAPABILITY_MODELS = { Post, Group, Bookmark, Page };
 
@@ -315,11 +316,48 @@ export async function authorizeInteraction({ actorId, targetId, capability }) {
     return { ok: false, status, message, reason };
   }
 
-  const feedCacheItem = await FeedItems.findOne({
+  let feedCacheItem = await FeedItems.findOne({
     id: targetId,
     deletedAt: null,
     tombstoned: { $ne: true },
   }).lean();
+
+  // Cold-miss on a remote target: this server has no prior relationship to
+  // it (never pulled/federated in) — e.g. a visiting identity (see
+  // routes/oauth/exchange.js, methods/oauth/proxyOutbox.js) interacting with
+  // a post their home server has never seen. Fetch + cache it on demand
+  // instead of 404ing, reusing the same machinery /resolve and /lookup
+  // already use for exactly this. Local misses are NOT retried here — a
+  // missing local object is genuinely missing.
+  if (!feedCacheItem) {
+    const { domain: localDomain } = getServerSettings();
+    const parsed = kowloonId(targetId);
+    const isRemote = parsed?.domain && parsed.domain.toLowerCase() !== localDomain?.toLowerCase();
+    if (isRemote) {
+      try {
+        const [{ default: getObjectById }, { default: writeFeedItems }] = await Promise.all([
+          import("#methods/core/getObjectById.js"),
+          import("#methods/feed/writeFeedItems.js"),
+        ]);
+        const resolved = await getObjectById(targetId, {
+          mode: "remote",
+          hydrateRemoteIntoDB: true,
+          enforceLocalVisibility: false,
+        });
+        if (resolved?.object) {
+          await writeFeedItems(resolved.object, resolved.object.objectType || parsed.type);
+        }
+      } catch (err) {
+        logger.info("On-demand remote resolve failed", { targetId, error: err.message });
+      }
+      feedCacheItem = await FeedItems.findOne({
+        id: targetId,
+        deletedAt: null,
+        tombstoned: { $ne: true },
+      }).lean();
+    }
+  }
+
   if (!feedCacheItem) return deny(404, "Not found", "not_found");
 
   const followerMap = await buildFollowerMap([feedCacheItem.actorId]);

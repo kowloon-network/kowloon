@@ -26,6 +26,9 @@ import Theme from "./Theme.js";
 import DiscoverySection from "./DiscoverySection.js";
 import Discovery from "./Discovery.js";
 import PushToken from "./PushToken.js";
+import OAuthCode from "./OAuthCode.js";
+import OAuthRefreshToken from "./OAuthRefreshToken.js";
+import VisitingIdentity from "./VisitingIdentity.js";
 export {
   Activity,
   Bookmark,
@@ -55,4 +58,7 @@ export {
   DiscoverySection,
   Discovery,
   PushToken,
+  OAuthCode,
+  OAuthRefreshToken,
+  VisitingIdentity,
 };
