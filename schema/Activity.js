@@ -57,12 +57,6 @@ const ActivitySchema = new Schema(
 );
 
 // Virtuals
-ActivitySchema.virtual("reacts", {
-  ref: "React",
-  localField: "id",
-  foreignField: "target",
-});
-
 // Mint id/url/server like before
 ActivitySchema.pre("save", async function (next) {
   try {

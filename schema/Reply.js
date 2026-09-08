@@ -1,8 +1,7 @@
 import mongoose from "mongoose";
 import { marked } from "marked";
 import sanitizeHtml from "#methods/utils/sanitize.js";
-import crypto from "crypto";
-import { Settings, User, React } from "./index.js";
+import { Settings, React } from "./index.js";
 import { getServerSettings } from "#methods/settings/schemaHelpers.js";
 import { linkifyMentions } from "#methods/mentions/linkify.js";
 import AttachmentSchema from "./subschema/Attachment.js";
@@ -105,16 +104,5 @@ ReplySchema.pre("findOneAndUpdate", async function (next) {
   }
   next();
 });
-
-ReplySchema.methods.verifySignature = async function () {
-  let actor = await User.findOne({ id: this.actorId }); // Retrieve the activity actor
-  let stringject = Buffer.from(JSON.stringify(this.id));
-  return crypto.verify(
-    "RSA-SHA256",
-    stringject,
-    actor.publicKey,
-    this.signature
-  );
-};
 
 export default mongoose.model("Reply", ReplySchema);

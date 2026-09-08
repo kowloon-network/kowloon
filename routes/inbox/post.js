@@ -132,32 +132,13 @@ export default route(
       return;
     }
 
-    // 3) Optional: verify remote-user JWT if provided (proxied user actions)
-    let remoteUser = null;
-    const authz = req.get("Authorization");
-    if (authz?.startsWith("Bearer ")) {
-      const expectedAud = `${req.protocol}://${req.get("Host")}`;
-      const dpop = req.get("DPoP"); // optional
-      const vr = await Kowloon.auth.verifyRemoteUser({
-        authz,
-        dpop,
-        expectedAud,
-      });
-      if (!vr.ok) {
-        setStatus(401);
-        set({ error: vr.error || "Remote user token invalid" });
-        return;
-      }
-      remoteUser = vr.user; // { id, issuer, scope }
-    }
-
-    // 4) Normalize inbound activity (translate AP format → internal format)
+    // 3) Normalize inbound activity (translate AP format → internal format)
     const rawActivity = {
       ...body,
       federated: true,
       remoteId: body.id || body.remoteId,
       actorId,
-      _federation: { domain: sig.domain, keyId: sig.keyId, remoteUser },
+      _federation: { domain: sig.domain, keyId: sig.keyId },
     };
     const activity = normalizeInboundActivity(rawActivity);
 

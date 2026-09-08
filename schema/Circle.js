@@ -3,7 +3,7 @@ import { React, Reply } from "./index.js";
 const Schema = mongoose.Schema;
 import Member from "./subschema/Member.js";
 import { getServerSettings } from "#methods/settings/schemaHelpers.js";
-import { signAs, verifyAs } from "#methods/utils/signing.js";
+import { signAs } from "#methods/utils/signing.js";
 
 const CircleSchema = new Schema(
   {
@@ -42,12 +42,6 @@ const CircleSchema = new Schema(
 );
 CircleSchema.index({ "members.id": 1 }); // fast "is viewer a member?" checks
 CircleSchema.index({ "members.server": 1 });
-CircleSchema.virtual("reacts", {
-  ref: "React",
-  localField: "id",
-  foreignField: "target",
-});
-
 CircleSchema.pre("save", async function (next) {
   if (this.isNew) {
     const { domain, actorId } = getServerSettings();
@@ -96,10 +90,5 @@ CircleSchema.post("updateOne", async function () {
     console.error("Circle post-updateOne hook error:", err.message);
   }
 });
-
-CircleSchema.methods.verifySignature = async function () {
-  const memberList = (this.members || []).map(m => m.id).sort().join(",");
-  return verifyAs(this.actorId, `${this.id}|${this.name || ""}|${this.to}|${memberList}`, this.signature);
-};
 
 export default mongoose.model("Circle", CircleSchema);

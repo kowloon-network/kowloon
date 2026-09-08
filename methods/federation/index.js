@@ -2,7 +2,6 @@
 
 import shouldFederate from "./shouldFederate.js";
 import verifyHttpSignature from "./verifyHttpSignature.js";
-import { startChallenge, finishChallenge } from "./authChallenge.js";
 import resolveAudience from "./resolveAudience.js";
 import enqueueOutbox from "./enqueueOutbox.js";
 import signHttpRequest from "./signHttpRequest.js";
@@ -29,10 +28,6 @@ const federation = {
   normalizeInboundActivity,
   processPollBatch,
   startPollWorker,
-  auth: {
-    startChallenge,
-    finishChallenge,
-  },
 };
 
 export default federation;
@@ -42,8 +37,6 @@ export {
   verifyHttpSignature,
   pullFromRemote,
   fetchRemoteServerProfile,
-  startChallenge,
-  finishChallenge,
   resolveAudience,
   enqueueOutbox,
   signHttpRequest,

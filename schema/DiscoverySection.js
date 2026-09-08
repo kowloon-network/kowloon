@@ -7,7 +7,7 @@
 
 import mongoose from "mongoose";
 import { getServerSettings, getServerActor } from "#methods/settings/schemaHelpers.js";
-import { signAs, verifyAs } from "#methods/utils/signing.js";
+import { signAs } from "#methods/utils/signing.js";
 
 const { Schema } = mongoose;
 
@@ -94,10 +94,6 @@ DiscoverySectionSchema.pre("save", async function (next) {
     next(err);
   }
 });
-
-DiscoverySectionSchema.methods.verifySignature = async function () {
-  return verifyAs(this.actorId, `${this.id}|${this.name}|${this.to}`, this.signature);
-};
 
 export default mongoose.model(
   "DiscoverySection",

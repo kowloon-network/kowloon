@@ -1,7 +1,7 @@
 import mongoose from "mongoose";
 import { marked } from "marked";
 import sanitizeHtml from "#methods/utils/sanitize.js";
-import { signData, verifyData, signAs, verifyAs } from "#methods/utils/signing.js";
+import { signAs } from "#methods/utils/signing.js";
 import { Settings, User, React, Reply, Circle } from "./index.js";
 import GeoPoint from "./subschema/GeoPoint.js";
 import ActorSchema from "./subschema/Actor.js";
@@ -180,18 +180,6 @@ PostSchema.index({
 
 PostSchema.index({ type: 1, "attachments.kind": 1 });
 
-PostSchema.virtual("reacts", {
-  ref: "React",
-  localField: "id",
-  foreignField: "target",
-});
-
-PostSchema.virtual("replies", {
-  ref: "Reply",
-  localField: "id",
-  foreignField: "target",
-});
-
 // Render source content to sanitized HTML.
 // Only text/markdown is accepted; anything else is treated as plain text.
 // safeMarkdown runs marked() then strips all tags not in the allowlist,
@@ -297,10 +285,6 @@ PostSchema.pre("findOneAndUpdate", async function (next) {
 
   next();
 });
-
-PostSchema.methods.verifySignature = async function () {
-  return verifyAs(this.actorId, `${this.id}|${this.source.content}`, this.signature);
-};
 
 const Post = mongoose.model("Post", PostSchema);
 export { Post, PostSchema };

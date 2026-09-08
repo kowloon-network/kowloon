@@ -1,12 +1,11 @@
 import mongoose from "mongoose";
 import bcrypt from "bcryptjs";
 import crypto from "crypto";
-import { signData, verifyData } from "#methods/utils/signing.js";
 const Schema = mongoose.Schema;
 const ObjectId = mongoose.Types.ObjectId;
 import GeoPointSchema from "./subschema/GeoPoint.js";
 import ProfileSchema from "./subschema/Profile.js";
-import { Settings, Circle, Group } from "./index.js";
+import { Settings, Circle } from "./index.js";
 import {
   getServerSettings,
   getSetting,
@@ -189,21 +188,6 @@ if (process.env.NODE_ENV === "development") {
   UserSchema.index({ "meta.externalId": 1 }, { unique: true, sparse: true });
 }
 
-// ---------- Virtuals: Circles ----------
-UserSchema.virtual("ownedCircles", {
-  ref: "Circle",
-  localField: "id", // user.id like "@alice@kwln.org"
-  foreignField: "actorId", // circles the user owns (Following, Blocked, etc.)
-  justOne: false,
-});
-
-UserSchema.virtual("memberCircles", {
-  ref: "Circle",
-  localField: "id",
-  foreignField: "members.id", // circles where user is in members[]
-  justOne: false,
-});
-
 /** ---------- ActivityStreams-friendly virtuals ---------- */
 // name <-> profile.name
 UserSchema.virtual("name")
@@ -369,67 +353,6 @@ UserSchema.pre("save", async function (next) {
 /** ---------- Methods (unchanged) ---------- */
 UserSchema.methods.verifyPassword = async function (plaintext) {
   return await bcrypt.compare(plaintext, this.password);
-};
-
-UserSchema.methods.getMemberships = async function () {
-  const circles = (
-    await Circle.find({
-      $or: [{ "members.id": this.id }, { actorId: this.id }],
-    }).lean()
-  ).map((c) => c.id);
-
-  const groups = (
-    await Group.find({
-      $or: [
-        { "members.id": this.id },
-        { actorId: this.id },
-        { admins: this.id },
-      ],
-    }).lean()
-  ).map((g) => g.id);
-
-  return [...circles, ...groups];
-};
-
-UserSchema.methods.getBlocked = async function () {
-  return (await Circle.findOne({ id: this.circles?.blocked })).members.map(
-    (m) => m.id,
-  );
-};
-
-UserSchema.methods.getMuted = async function () {
-  return (await Circle.findOne({ id: this.circles?.muted })).members.map(
-    (m) => m.id,
-  );
-};
-
-UserSchema.methods.sign = function (data) {
-  return signData(this.privateKey, data);
-};
-
-UserSchema.methods.verify = function (data, signature) {
-  return verifyData(this.publicKey, data, signature);
-};
-
-UserSchema.methods.createUserSignature = function (timestamp) {
-  const token = this.id + ":" + timestamp.toString();
-  const hash = crypto.createHash("sha256").update(token).digest();
-  const signature = crypto
-    .sign("sha256", hash, this.privateKey)
-    .toString("base64");
-  return { id: this.id, timestamp, signature };
-};
-
-UserSchema.methods.verifyUserSignature = function (timestamp, signature) {
-  const token = this.id + ":" + timestamp;
-  const hash = crypto.createHash("sha256").update(token).digest();
-  const isValid = crypto.verify(
-    "sha256",
-    hash,
-    this.publicKey,
-    Buffer.from(signature, "base64"),
-  );
-  return isValid ? isValid : new Error("User cannot be authenticated");
 };
 
 const User = mongoose.model("User", UserSchema);

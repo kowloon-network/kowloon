@@ -4,7 +4,7 @@ import sanitizeHtml from "#methods/utils/sanitize.js";
 import crypto from "crypto";
 import { Settings, User, Reply, React } from "./index.js";
 import { getServerSettings } from "#methods/settings/schemaHelpers.js";
-import { signAs, verifyAs } from "#methods/utils/signing.js";
+import { signAs } from "#methods/utils/signing.js";
 import AttachmentSchema from "./subschema/Attachment.js";
 
 const ALLOWED_TAGS = [
@@ -102,18 +102,6 @@ PageSchema.index({
 
 PageSchema.index({ type: 1, "attachments.kind": 1 });
 
-PageSchema.virtual("reacts", {
-  ref: "React",
-  localField: "id",
-  foreignField: "target",
-});
-
-PageSchema.virtual("replies", {
-  ref: "Reply",
-  localField: "id",
-  foreignField: "target",
-});
-
 PageSchema.pre("save", async function (next) {
   try {
     this.slug = this.slug || slugify(this.title);
@@ -171,9 +159,5 @@ PageSchema.pre("updateOne", async function (next) {
 
   next();
 });
-
-PageSchema.methods.verifySignature = async function () {
-  return verifyAs(this.actorId, `${this.id}|${this.createdAt}`, this.signature);
-};
 
 export default mongoose.model("Page", PageSchema);

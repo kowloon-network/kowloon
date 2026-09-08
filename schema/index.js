@@ -15,7 +15,6 @@ import Outbox from "./Outbox.js";
 import File from "./File.js";
 import MediaJob from "./MediaJob.js";
 import BackupJob from "./BackupJob.js";
-import Feed from "./Feed.js";
 import FeedItems from "./FeedItems.js";
 import FeedFanOut from "./FeedFanOut.js";
 import SignatureNonce from "./SignatureNonce.js";
@@ -45,7 +44,6 @@ export {
   Invite,
   Outbox,
   File,
-  Feed,
   FeedItems,
   FeedFanOut,
   SignatureNonce,

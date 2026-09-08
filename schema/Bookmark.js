@@ -4,7 +4,7 @@ import Settings from "./Settings.js";
 import { marked } from "marked";
 import sanitizeHtml from "#methods/utils/sanitize.js";
 import { getServerSettings } from "#methods/settings/schemaHelpers.js";
-import { signAs, verifyAs } from "#methods/utils/signing.js";
+import { signAs } from "#methods/utils/signing.js";
 
 const ALLOWED_TAGS = [
   "p", "br", "strong", "em", "s", "u", "a", "ul", "ol", "li",
@@ -117,12 +117,6 @@ BookmarkSchema.index({
 });
 
 // If you want reactions *to bookmarks* (optional; keep if you use it)
-BookmarkSchema.virtual("reacts", {
-  ref: "React",
-  localField: "id",
-  foreignField: "target",
-});
-
 // ------ Helpers ------
 function inferOwnerTypeFromId(id) {
   if (!id || typeof id !== "string") return "user";
@@ -204,9 +198,5 @@ BookmarkSchema.pre("save", async function (next) {
     next(err);
   }
 });
-
-BookmarkSchema.methods.verifySignature = async function () {
-  return verifyAs(this.actorId, `${this.id}|${this.href || this.target || ""}|${this.source?.content || ""}`, this.signature);
-};
 
 export default mongoose.model("Bookmark", BookmarkSchema);

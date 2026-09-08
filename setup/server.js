@@ -194,17 +194,6 @@ ${smtpLines}
   // ── Shared services snippet (workers + minio + mongo) ──────────────────────
   const sharedServices = `
   # ── Background workers ───────────────────────────────────────────────────────
-  worker-feed:
-    image: ghcr.io/jzellis/kowloon:latest
-    restart: unless-stopped
-    command: node workers/feedFanOut.js
-    env_file: .env
-    depends_on:
-      mongo:
-        condition: service_healthy
-    networks:
-      - internal
-
   worker-outbox:
     image: ghcr.io/jzellis/kowloon:latest
     restart: unless-stopped

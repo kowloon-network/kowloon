@@ -3,7 +3,7 @@ import mongoose from "mongoose";
 import { Circle, User, React, Reply } from "./index.js";
 import GeoPoint from "./subschema/GeoPoint.js";
 import { getServerSettings } from "#methods/settings/schemaHelpers.js";
-import { signAs, verifyAs } from "#methods/utils/signing.js";
+import { signAs } from "#methods/utils/signing.js";
 
 const { Schema } = mongoose;
 
@@ -82,12 +82,6 @@ const GroupSchema = new Schema(
 );
 
 // Virtuals
-GroupSchema.virtual("reacts", {
-  ref: "React",
-  localField: "id",
-  foreignField: "target",
-});
-
 // -------- pre('save'): mint id/url/server/icon AND create circles synchronously --------
 GroupSchema.pre("save", async function (next) {
   try {
@@ -192,9 +186,5 @@ GroupSchema.pre("save", async function (next) {
 });
 
 GroupSchema.index({ name: 'text', summary: 'text' });
-
-GroupSchema.methods.verifySignature = async function () {
-  return verifyAs(this.actorId, `${this.id}|${this.name || ""}|${this.to}`, this.signature);
-};
 
 export default mongoose.model("Group", GroupSchema);

@@ -193,20 +193,6 @@ InviteSchema.methods.redeem = async function (userId, email) {
   return this;
 };
 
-// Static method: find valid invite by code
-InviteSchema.statics.findByCode = async function (code) {
-  const invite = await this.findOne({
-    code,
-    active: true,
-    deletedAt: null,
-  });
-
-  if (!invite) return null;
-  if (!invite.isValid) return null;
-
-  return invite;
-};
-
 // Static method: create individual invite
 InviteSchema.statics.createIndividual = async function (actorId, email, options = {}) {
   return this.create({
