@@ -19,7 +19,14 @@ router.use("/", verifyEmailRouter);
 
 router.use(strictRateLimiter);
 
-router.use("/", loginRouter);
+// login.js exports a bare route handler, NOT an express.Router — mounting it
+// with router.use("/") made it catch-all middleware for every path under
+// /auth, and since it always responds instead of calling next(), it swallowed
+// every route registered below it: forgot-password, reset-password and
+// resend-verification all answered "Unsupported fields: ..." from login's
+// strict body check and were completely unreachable in production. Mount it
+// at its own path, the way the equally-bare me.js already is.
+router.post("/login", loginRouter);
 router.use("/", forgotPasswordRouter);
 router.use("/", resetPasswordRouter);
 router.use("/", resendVerificationRouter);
