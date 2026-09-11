@@ -6,14 +6,36 @@ import init from "#methods/utils/init.js";
 
 let server;
 
+// Runs per test FILE, and must: Jest gives every test file its own module
+// registry, so `mongoose` here is a distinct instance per file with its own
+// connection state. This used to early-return on a global
+// __TEST_SETUP_COMPLETE__ flag — but that flag is shared across files while
+// the mongoose instance is not, so every file after the first skipped
+// connecting and then failed with "Operation `x.findOne()` buffering timed
+// out after 10000ms". Each file now gets its own connection, its own wiped
+// database, and its own server, which also means suites can't pollute each
+// other.
 beforeAll(async () => {
-  // Only setup once globally
-  if (global.__TEST_SETUP_COMPLETE__) {
-    return;
-  }
-
   const baseUri = process.env.MONGO_URI || "mongodb://localhost:27017/kowloon";
-  const uri = baseUri.replace(/\/(\w+)(\?|$)/, "/kowloon_test$2");
+
+  // One database per test FILE, named from the file itself. Every file wipes
+  // its own database on entry, so a shared "kowloon_test" meant each suite
+  // dropped the data the others were mid-way through using the moment more
+  // than one ran. Per-file databases also let the suite run without
+  // --runInBand, which matters because booting the app starts interval-driven
+  // background workers (outbox push, poll) that keep querying after a file
+  // finishes — in a shared process those stray queries land on a disconnected
+  // mongoose and surface as "buffering timed out" against whichever suite is
+  // unlucky enough to be running.
+  const testPath = expect.getState?.()?.testPath || "shared";
+  const slug =
+    testPath
+      .split("/")
+      .pop()
+      .replace(/\.test\.js$/, "")
+      .replace(/[^a-zA-Z0-9]/g, "_")
+      .slice(0, 40) || "shared";
+  const uri = baseUri.replace(/\/(\w+)(\?|$)/, `/kowloon_test_${slug}$2`);
 
   // Only connect if not already connected
   if (mongoose.connection.readyState === 0) {
@@ -55,12 +77,19 @@ beforeAll(async () => {
   global.__TEST_SERVER__ = server;
 }, 60000);
 
+// Symmetrical with beforeAll: this file's own connection and server, closed
+// at the end of this file. Safe now that setup is per-file — previously it
+// tore down a connection the *other* suites were still relying on.
 afterAll(async () => {
-  if (global.__TEST_SETUP_COMPLETE__) {
-    await mongoose.disconnect();
-    if (global.__TEST_SERVER__) {
-      await new Promise((resolve) => global.__TEST_SERVER__.close(resolve));
-    }
-    global.__TEST_SETUP_COMPLETE__ = false;
+  // Drop this file's database so repeat runs start clean and the Mongo
+  // instance doesn't accumulate one database per suite forever.
+  try {
+    await mongoose.connection.dropDatabase();
+  } catch {
+    // Already gone / never connected — nothing to clean up.
+  }
+  await mongoose.disconnect();
+  if (server) {
+    await new Promise((resolve) => server.close(resolve));
   }
 });

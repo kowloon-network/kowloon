@@ -2,6 +2,10 @@
 export default {
   testEnvironment: "node",
   transform: {},
+  // tests/setup/jest.setup.js intentionally leaves the shared mongoose
+  // connection and HTTP server open for the whole run (tearing them down per
+  // suite broke every suite after the first), so the process needs a push.
+  forceExit: true,
   //   extensionsToTreatAsEsm: [".js", ".mjs"],
   moduleFileExtensions: ["js", "mjs", "json"],
   // If you use path aliases via "imports" in package.json, Jest respects them in ESM mode.
@@ -23,6 +27,12 @@ export default {
       testEnvironment: "node",
       transform: {},
       setupFilesAfterEnv: ["<rootDir>/tests/setup/jest.setup.js"],
+      // See tests/helpers/uuid-shim.cjs — without this, /admin, /files, /og
+      // and /servers fail to import and routes/index.js silently skips them,
+      // so they 404 in tests while working fine in production.
+      moduleNameMapper: {
+        "^uuid$": "<rootDir>/tests/helpers/uuid-shim.cjs",
+      },
     },
   ],
 };
