@@ -55,7 +55,7 @@
     "random-words": "^2.0.1",
     "sanitize-html": "^2.17.4",
     "serve-static": "^2.2.1",
-    "sharp": "^0.34.5",
+    "sharp": "^0.35.4",
     "winston": "^3.14.2"
   },
   "overrides": {
