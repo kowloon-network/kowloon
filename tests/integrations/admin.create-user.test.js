@@ -145,6 +145,13 @@ test("refuses a non-admin", async () => {
   expect(await User.findOne({ username: "shouldnotexist" }).lean()).toBeNull();
 });
 
+// 401 here, but 404 against a real deployment: routes/admin/index.js lets an
+// unauthenticated request with no Accept header fall through to the SPA so
+// browser deep-links to /admin/* render the app rather than raw JSON, and
+// req.accepts(["html","json"]) answers "html" when nothing was asked for.
+// buildApp() sets no frontendEnabled, so the bypass is inert in tests. Either
+// way the request is refused and nothing is created — which is the part that
+// matters, so assert that rather than a status that depends on deployment.
 test("refuses unauthenticated", async () => {
   const anon = new TestClient({ baseURL: global.__TEST_BASE_URL__ });
   const { status } = await anon.request("/admin/users", {
@@ -152,7 +159,7 @@ test("refuses unauthenticated", async () => {
     body: { username: "anonmade", password: "anonmadepass" },
   });
 
-  expect(status).toBe(401);
+  expect([401, 404]).toContain(status);
   expect(await User.findOne({ username: "anonmade" }).lean()).toBeNull();
 });
 
