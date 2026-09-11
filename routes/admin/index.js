@@ -60,6 +60,18 @@ router.use(async (req, res, next) => {
     const userId = payload?.user?.id || payload?.id || payload?.sub;
     if (!userId) return res.status(401).json({ error: "Invalid token" });
 
+    // A scope:"visiting" token is held by a FOREIGN server acting on this
+    // user's behalf via cross-server OAuth. Being an admin HERE must not hand
+    // admin powers to a server they merely signed into over there — visiting
+    // sessions are only ever granted interaction-shaped actions. Scope was
+    // previously checked only in routes/outbox/post.js, so every /admin route
+    // accepted one of these happily.
+    if (payload?.user?.scope === "visiting") {
+      return res
+        .status(403)
+        .json({ error: "A visiting session cannot use admin routes" });
+    }
+
     const admin = await isServerAdmin(userId);
     if (!admin) {
       return res.status(403).json({ error: "Server admin access required" });
