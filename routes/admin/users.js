@@ -1,9 +1,11 @@
 // routes/admin/users.js
+import crypto from "crypto";
 import express from "express";
 import route from "../utils/route.js";
 import makeCollection from "../utils/makeCollection.js";
 import { User } from "#schema";
 import { getSetting } from "#methods/settings/cache.js";
+import getSettings from "#methods/settings/get.js";
 
 const router = express.Router({ mergeParams: true });
 
@@ -69,6 +71,118 @@ router.get(
         return;
       }
       set("user", sanitize(user));
+    },
+    { allowUnauth: false }
+  )
+);
+
+// POST /admin/users — create an account directly, bypassing registration.
+//
+// Deliberately skips the gates in routes/register/index.js that exist to
+// control *self*-signup: registrationIsOpen, invite codes, and the username
+// petty-limits. An admin creating an account on someone's behalf is the
+// explicit override for those.
+//
+// It does NOT skip the username slug rule — usernames become part of the
+// account id (@user@domain) and actor URL, so a non-slug here produces
+// malformed ids that break profile edits and federation.
+//
+// Password: pass one, or omit it and the server generates a strong one and
+// returns it exactly once in the response. Generating matters on a server
+// with no SMTP configured, where there is otherwise no way to hand someone
+// their credentials.
+router.post(
+  "/",
+  route(
+    async ({ body, set, setStatus }) => {
+      if (!body || typeof body !== "object") {
+        setStatus(400);
+        set("error", "Invalid JSON body");
+        return;
+      }
+
+      const settings = await getSettings();
+      const domain = settings?.domain;
+      if (!domain) {
+        setStatus(500);
+        set("error", "Missing settings.domain");
+        return;
+      }
+
+      const username =
+        typeof body.username === "string" ? body.username.trim() : "";
+      const email = typeof body.email === "string" ? body.email.trim() : "";
+      const name = typeof body.name === "string" ? body.name.trim() : "";
+
+      if (!username) {
+        setStatus(400);
+        set("error", "username is required");
+        return;
+      }
+
+      // Same rule as registration — see routes/register/index.js.
+      if (!/^[a-z0-9_]{2,32}$/.test(username)) {
+        setStatus(400);
+        set(
+          "error",
+          "Username must be 2–32 characters using only lowercase letters, numbers, or underscores (no spaces or capitals). Put their full name in the display name instead."
+        );
+        return;
+      }
+
+      let password =
+        typeof body.password === "string" && body.password ? body.password : null;
+      const generated = !password;
+      if (password && password.length < 8) {
+        setStatus(400);
+        set("error", "Password must be at least 8 characters");
+        return;
+      }
+      if (generated) {
+        // 24 chars of base58-ish alphabet: no look-alike glyphs, so it
+        // survives being read aloud or copied by hand.
+        const alphabet =
+          "abcdefghijkmnopqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+        const bytes = crypto.randomBytes(24);
+        password = Array.from(bytes, (b) => alphabet[b % alphabet.length]).join("");
+      }
+
+      const expectedId = `@${username}@${domain}`;
+      const existing = await User.findOne({
+        $or: [{ username }, { id: expectedId }],
+      }).lean();
+      if (existing) {
+        setStatus(409);
+        set("error", "User already exists");
+        return;
+      }
+
+      // User.create (not a raw insert) so the pre-save hook runs: it sets id,
+      // actorId, url, server/domain/jwksUrl, generates the RSA keypair, hashes
+      // the password, and creates the following/allFollowing/blocked/muted
+      // system circles. Skipping it leaves an account that can't federate.
+      //
+      // emailVerified is forced true: an admin creating the account IS the
+      // vouching step, and on a server without SMTP an unverified account
+      // could never be verified and so could never log in.
+      //
+      // acknowledgedRules is intentionally left empty — the person hasn't
+      // agreed to anything yet, and recording consent they never gave would
+      // be a lie in their own account history.
+      const created = await User.create({
+        username,
+        password,
+        ...(email ? { email } : {}),
+        ...(name ? { profile: { name } } : {}),
+        emailVerified: true,
+      });
+
+      setStatus(201);
+      set("ok", true);
+      set("user", sanitize(created.toObject()));
+      // Returned once, never stored in readable form — the pre-save hook has
+      // already hashed what's in the database.
+      if (generated) set("generatedPassword", password);
     },
     { allowUnauth: false }
   )
