@@ -11,15 +11,7 @@ import { FederatedServer } from "#schema";
 import sanitizeHtml from "#methods/utils/sanitize.js";
 import { getServerSettings } from "#methods/settings/schemaHelpers.js";
 import logger from "#methods/utils/logger.js";
-
-function normalizeDomain(domain) {
-  return domain
-    .toLowerCase()
-    .replace(/^https?:\/\//, "")
-    .replace(/^@/, "")
-    .replace(/\/.*$/, "")  // strip any path
-    .replace(/:\d+$/, ""); // strip port
-}
+import parseServerDomain from "#methods/parse/serverDomain.js";
 
 function stripHtml(str) {
   if (!str) return null;
@@ -36,7 +28,7 @@ function stripHtml(str) {
  * @returns {Promise<{ server: Object|null, error: string|null }>}
  */
 export default async function fetchRemoteServerProfile(domain, { force = false, staleSecs = 3600 } = {}) {
-  domain = normalizeDomain(domain);
+  domain = parseServerDomain(domain) || domain;
 
   const { domain: ourDomain } = getServerSettings();
   if (domain === ourDomain) {

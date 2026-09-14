@@ -19,6 +19,7 @@ import systemRouter from "./system.js";
 import backupRouter from "./backup.js";
 import sectionsRouter from "./sections.js";
 import discoveryRouter from "./discovery.js";
+import serversRouter from "./servers.js";
 
 const router = express.Router({ mergeParams: true });
 
@@ -106,5 +107,6 @@ router.use("/system", systemRouter);
 router.use("/backup", backupRouter);
 router.use("/sections", sectionsRouter);
 router.use("/discovery", discoveryRouter);
+router.use("/servers", serversRouter);
 
 export default router;

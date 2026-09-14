@@ -2,7 +2,7 @@
 import route from "../utils/route.js";
 import Kowloon from "#kowloon";
 import Inbox from "#schema/Inbox.js";
-import { Group, Circle } from "#schema";
+import { Group, Circle, FederatedServer } from "#schema";
 import log from "#methods/utils/logger.js";
 import checkBlocked from "#methods/inbox/checkBlocked.js";
 
@@ -10,6 +10,12 @@ import normalizeInboundActivity from "#methods/federation/normalizeInboundActivi
 import enqueueOutbox from "#methods/federation/enqueueOutbox.js";
 import { getSetting } from "#methods/settings/cache.js";
 import isLocalDomain from "#methods/parse/isLocalDomain.js";
+
+// Activity types refused from a "blocked" (as opposed to suspended) server.
+// The schema's stated contract for that level is "replies/reacts from this
+// server are rejected" while content keeps flowing, so this is deliberately
+// narrow — anything not listed here is still accepted.
+const INTERACTION_TYPES = new Set(["Reply", "React"]);
 
 async function fanOutGroupPost(activity, activityId) {
   try {
@@ -109,6 +115,47 @@ export default route(
       if (!keyDomain || keyDomain !== groupDomain) {
         setStatus(403);
         set({ error: `Group fan-out rejected: signer (${keyDomain ?? "unknown"}) does not own group on ${groupDomain}` });
+        return;
+      }
+    }
+
+    // 1.5) Server-level moderation, set by an admin in Moderation > Servers.
+    //
+    // NOTE: sig.domain is derived from the Host header — it is THIS server's
+    // own hostname, not the sender's (see verifyHttpSignature). The only
+    // trustworthy identifier for who signed this request is the keyId host,
+    // which the group fan-out check above also relies on.
+    //
+    // Two levels, per schema/FederatedServer.js:
+    //   suspended — full defederation, refuse everything.
+    //   blocked   — interaction block: refuse replies and reacts, but let
+    //               content through, because pulls deliberately keep running
+    //               so local subscribers don't silently lose what they follow.
+    let signerDomain = null;
+    try { signerDomain = new URL(sig.keyId).hostname; } catch (_) {}
+
+    if (signerDomain) {
+      const remote = await FederatedServer.findOne({ domain: signerDomain })
+        .select("status")
+        .lean();
+
+      if (remote?.status === "suspended") {
+        log.info("Activity refused: sending server is suspended", {
+          signerDomain,
+          type: body.type,
+        });
+        setStatus(403);
+        set({ error: "This server is not federating with your server" });
+        return;
+      }
+
+      if (remote?.status === "blocked" && INTERACTION_TYPES.has(body.type)) {
+        log.info("Interaction refused: sending server is blocked", {
+          signerDomain,
+          type: body.type,
+        });
+        setStatus(403);
+        set({ error: "Interactions from your server are not accepted" });
         return;
       }
     }

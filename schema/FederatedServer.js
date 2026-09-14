@@ -226,5 +226,67 @@ FederatedServerSchema.statics.getServersReadyForPull = async function (limit = 1
     .lean();
 };
 
+// ── Moderation ────────────────────────────────────────────────────────────────
+// Restored from git history (removed in 36af3a2c's dead-code pass, which noted
+// they were unreachable only because no admin UI existed to call them). The
+// Moderation page's Servers tab is that UI.
+//
+// The two levels differ deliberately — see the header comment on this file.
+// block: interactions from the server are refused, but content still pulls, so
+// local users who already subscribe don't silently lose what they follow.
+// suspend: full defederation.
+
+FederatedServerSchema.statics.blockServer = async function (domain, reason) {
+  await this.findOneAndUpdate(
+    { domain },
+    {
+      status: "blocked",
+      blockedAt: new Date(),
+      blockedReason: reason,
+      // nextPullAt intentionally untouched — local subscribers still get content
+    },
+    { upsert: true }
+  );
+};
+
+FederatedServerSchema.statics.unblockServer = async function (domain) {
+  await this.findOneAndUpdate(
+    { domain },
+    {
+      status: "active",
+      blockedAt: null,
+      blockedReason: null,
+      pullErrorCount: 0,
+      nextPullAt: new Date(),
+    }
+  );
+};
+
+FederatedServerSchema.statics.suspendServer = async function (domain, reason) {
+  await this.findOneAndUpdate(
+    { domain },
+    {
+      status: "suspended",
+      suspendedAt: new Date(),
+      suspendedReason: reason,
+      nextPullAt: null,
+    },
+    { upsert: true }
+  );
+};
+
+FederatedServerSchema.statics.unsuspendServer = async function (domain) {
+  await this.findOneAndUpdate(
+    { domain },
+    {
+      status: "active",
+      suspendedAt: null,
+      suspendedReason: null,
+      pullErrorCount: 0,
+      nextPullAt: new Date(),
+    }
+  );
+};
+
 const FederatedServer = mongoose.model("FederatedServer", FederatedServerSchema);
 export default FederatedServer;
