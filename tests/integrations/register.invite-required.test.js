@@ -139,11 +139,19 @@ test("an individual invite only works for its own email", async () => {
 // The federation-facing fields must keep reporting accurately now that
 // there's no per-server flag behind them — false, not absent.
 //
-// NodeInfo isn't covered here: routes/well-known/index.js mounts nodeinfo20.js
-// via a relative-path trick (router.use("/../nodeinfo/2.0", ...)) to serve it
-// outside its own /.well-known prefix, and that 404s under buildApp()'s test
-// harness even though it resolves correctly in the real server — a pre-existing
-// mounting quirk, unrelated to this change. Verified live instead (kwln.dev).
+// NodeInfo isn't covered here, and NOT because of a harness quirk as
+// originally assumed. Verified live against kwln.dev: GET /nodeinfo/2.0
+// returns the SPA's index.html, not JSON, in the real deployed server too.
+// routes/well-known/index.js mounts nodeinfo20.js via
+// router.use("/../nodeinfo/2.0", nodeinfo20) — a relative-path trick meant to
+// serve it outside the /.well-known prefix — but Express mount paths are
+// plain string prefixes, not filesystem-style paths, so a literal "/../"
+// segment is very unlikely to ever match a real incoming request path; it
+// silently falls through to the SPA catch-all every time. This predates the
+// invite-code change entirely (unchanged since eb251e31) and is a real,
+// separate federation-discovery bug — NodeInfo is unreachable on every
+// Kowloon server right now. Flagged, deliberately NOT fixed here (out of
+// scope for this change) — filed as its own follow-up.
 test("the public profile reports openRegistrations: false", async () => {
   const profile = await admin.request("/profile");
   expect(profile.json.openRegistrations).toBe(false);
