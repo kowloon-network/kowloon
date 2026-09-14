@@ -79,7 +79,7 @@ router.get(
 // POST /admin/users — create an account directly, bypassing registration.
 //
 // Deliberately skips the gates in routes/register/index.js that exist to
-// control *self*-signup: registrationIsOpen, invite codes, and the username
+// control *self*-signup: the mandatory invite code, and the username
 // petty-limits. An admin creating an account on someone's behalf is the
 // explicit override for those.
 //

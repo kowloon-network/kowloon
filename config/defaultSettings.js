@@ -114,15 +114,6 @@ const defaultSettings = (ctx) => {
       ui: { type: "json", label: "React Emojis", group: "appearance", order: 2 },
     },
 
-    // ── Registration ─────────────────────────────────────────────────────────
-    registrationIsOpen: {
-      value: true,
-      summary: "When enabled, anyone can register without an invite code.",
-      to: "@public",
-      canEdit: "@admin",
-      ui: { type: "boolean", label: "Open Registration", group: "registration", order: 1 },
-    },
-
     // ── Users & defaults ─────────────────────────────────────────────────────
     defaultPronouns: {
       value: {

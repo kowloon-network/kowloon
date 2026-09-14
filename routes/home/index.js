@@ -18,7 +18,6 @@ const serverInfo = route(async ({ set }) => {
     set("domain", settings?.domain || undefined);
     set("icon", settings?.profile?.icon || undefined);
     set("image", settings?.profile?.image || undefined);
-    set("registrationIsOpen", !!settings?.registrationIsOpen);
     set("endpoints", {
       users: `/users`,
       posts: `/posts`,

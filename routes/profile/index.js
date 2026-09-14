@@ -68,7 +68,9 @@ router.get(
       set("description", profile.description || null);
       set("language", profile.language || []);
       set("location", profile.location || null);
-      set("openRegistrations", !!settings?.registrationIsOpen);
+      // No server-wide open-signup switch — see nodeinfo20.js for why this
+      // stays present-and-false rather than being removed.
+      set("openRegistrations", false);
       set("userCount", userCount);
       set("postCount", postCount);
 

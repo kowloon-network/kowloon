@@ -15,7 +15,6 @@ router.get("/", async (req, res) => {
     Post.countDocuments({ deletedAt: null }).catch(() => 0),
   ]);
 
-  const registrationIsOpen = settings?.registrationIsOpen !== false;
   const siteTitle = settings?.profile?.name || process.env.SITE_TITLE || "Kowloon";
 
   res.json({
@@ -23,7 +22,11 @@ router.get("/", async (req, res) => {
     software: { name: "kowloon", version },
     protocols: ["activitypub"],
     services: { inbound: [], outbound: [] },
-    openRegistrations: registrationIsOpen,
+    // Kowloon has no server-wide open-signup switch — registration always
+    // requires an invite (individual or an admin-issued unlimited link).
+    // false is the accurate NodeInfo answer, not a placeholder; the field
+    // stays present because other fediverse software reads it.
+    openRegistrations: false,
     usage: { users: { total: userTotal }, localPosts },
     metadata: {
       siteTitle,

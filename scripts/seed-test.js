@@ -15,6 +15,10 @@ import "dotenv/config";
 const BASE_URL = process.env.TEST_BASE_URL || "http://localhost:3000";
 const DOMAIN = process.env.DOMAIN || "kwln.org";
 const PASSWORD = "testpass";
+// The first-boot admin account (see setup/ + ADMIN_USERNAME/ADMIN_PASSWORD in
+// .env), needed to mint an invite now that registration always requires one.
+const ADMIN_USERNAME = process.env.ADMIN_USERNAME || "admin";
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || "changeme";
 
 const args = new Set(process.argv.slice(2));
 
@@ -39,13 +43,30 @@ async function request(method, path, body, token) {
 
 const POST = (path, body, token) => request("POST", path, body, token);
 
-async function login(username) {
-  const r = await POST("/auth", { username, password: PASSWORD });
+async function login(username, password = PASSWORD) {
+  // NOTE: was POSTing to "/auth", never a real route — fixed while touching
+  // this function to add the admin bootstrap login below. This script was
+  // broken regardless of the invite-required change.
+  const r = await POST("/auth/login", { username, password });
   return { token: r.token, user: r.user };
 }
 
 async function register(data) {
   return POST("/register", data);
+}
+
+// Registration always requires an invite code — mint one unlimited-use "open"
+// invite via the first-boot admin account and reuse it for every seeded user,
+// rather than threading a real invite through each individually. Matches how
+// an admin actually onboards a batch of people in production.
+async function createSeedInvite() {
+  const { token } = await login(ADMIN_USERNAME, ADMIN_PASSWORD);
+  const { invite } = await POST(
+    "/admin/invites",
+    { type: "open", note: "seed-test.js" },
+    token
+  );
+  return invite.code;
 }
 
 // POST an activity to /outbox and return the response
@@ -68,12 +89,16 @@ async function main() {
 
   // ── Step 1: Register users ────────────────────────────────────────────────
 
+  console.log("→ Minting a seed invite via the admin account...");
+  const inviteCode = await createSeedInvite();
+
   console.log("→ Registering 4 users (password: testpass)...");
 
   await register({
     username: "alice",
     email: "alice@example.com",
     password: PASSWORD,
+    inviteCode,
     profile: { name: "Alice Anderson", bio: "Public user for testing" },
     to: "@public",
     canReply: "@public",
@@ -84,6 +109,7 @@ async function main() {
     username: "bob",
     email: "bob@example.com",
     password: PASSWORD,
+    inviteCode,
     profile: { name: "Bob Baker", bio: "Server-only user for testing" },
     to: `@${DOMAIN}`,
     canReply: `@${DOMAIN}`,
@@ -95,6 +121,7 @@ async function main() {
     username: "carol",
     email: "carol@example.com",
     password: PASSWORD,
+    inviteCode,
     profile: { name: "Carol Chen", bio: "Circle-only user for testing" },
     to: "@public",
     canReply: "@public",
@@ -106,6 +133,7 @@ async function main() {
     username: "dave",
     email: "dave@example.com",
     password: PASSWORD,
+    inviteCode,
     profile: { name: "Dave Davis", bio: "Private user for testing" },
     to: `@dave@${DOMAIN}`,
     canReply: `@dave@${DOMAIN}`,

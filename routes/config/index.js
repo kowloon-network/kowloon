@@ -11,7 +11,6 @@ router.get("/", (_req, res) => {
     apiUrl: `https://${domain}`,
     domain,
     siteTitle: getSetting("siteTitle") || getSetting("profile")?.name || "Kowloon",
-    registrationIsOpen: getSetting("registrationIsOpen") ?? true,
   });
 });
 

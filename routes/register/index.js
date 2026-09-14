@@ -89,50 +89,49 @@ const registerHandler = route(
       return;
     }
 
-    // Optional: toggleable self-registration (defaults to enabled)
-    const registrationIsOpen = settings.registrationIsOpen !== false;
+    // Registration always requires a valid invite code — individual (one
+    // named person) or "open" (a link an admin can hand out, optionally
+    // unlimited-redemption). There is no server-wide open-signup switch
+    // anymore: a server that wants low-friction signup issues an "open"
+    // invite with maxRedemptions: null instead, which stays admin-owned
+    // (trackable, revocable, expirable) rather than an unaccountable flag.
     const inviteCode = isNonEmpty(body.inviteCode) ? body.inviteCode.trim() : null;
 
-    // If registration is closed, require an invite code
-    let invite = null;
-    if (!registrationIsOpen) {
-      if (!inviteCode) {
-        setStatus(403);
-        set("error", "Registration is invite-only. Please provide an invite code.");
-        return;
-      }
+    if (!inviteCode) {
+      setStatus(403);
+      set("error", "Registration requires an invite code.");
+      return;
+    }
 
-      // Find and validate the invite
-      invite = await Invite.findOne({
-        code: inviteCode,
-        active: true,
-        deletedAt: null,
-      });
+    const invite = await Invite.findOne({
+      code: inviteCode,
+      active: true,
+      deletedAt: null,
+    });
 
-      if (!invite) {
-        setStatus(404);
-        set("error", "Invalid invite code");
-        return;
-      }
+    if (!invite) {
+      setStatus(404);
+      set("error", "Invalid invite code");
+      return;
+    }
 
-      if (!invite.isValid) {
-        // Determine specific reason
-        let reason = "Invite is no longer valid";
-        if (invite.expiresAt && new Date() > invite.expiresAt) {
-          reason = "Invite has expired";
-        } else if (invite.type === "individual" && invite.usedAt) {
-          reason = "Invite has already been used";
-        } else if (
-          invite.type === "open" &&
-          invite.maxRedemptions !== null &&
-          invite.redemptionCount >= invite.maxRedemptions
-        ) {
-          reason = "Invite has reached its redemption limit";
-        }
-        setStatus(410);
-        set("error", reason);
-        return;
+    if (!invite.isValid) {
+      // Determine specific reason
+      let reason = "Invite is no longer valid";
+      if (invite.expiresAt && new Date() > invite.expiresAt) {
+        reason = "Invite has expired";
+      } else if (invite.type === "individual" && invite.usedAt) {
+        reason = "Invite has already been used";
+      } else if (
+        invite.type === "open" &&
+        invite.maxRedemptions !== null &&
+        invite.redemptionCount >= invite.maxRedemptions
+      ) {
+        reason = "Invite has reached its redemption limit";
       }
+      setStatus(410);
+      set("error", reason);
+      return;
     }
 
     const input = pickUserInput(body);
