@@ -139,22 +139,23 @@ test("an individual invite only works for its own email", async () => {
 // The federation-facing fields must keep reporting accurately now that
 // there's no per-server flag behind them — false, not absent.
 //
-// NodeInfo isn't covered here, and NOT because of a harness quirk as
-// originally assumed. Verified live against kwln.dev: GET /nodeinfo/2.0
-// returns the SPA's index.html, not JSON, in the real deployed server too.
-// routes/well-known/index.js mounts nodeinfo20.js via
-// router.use("/../nodeinfo/2.0", nodeinfo20) — a relative-path trick meant to
-// serve it outside the /.well-known prefix — but Express mount paths are
-// plain string prefixes, not filesystem-style paths, so a literal "/../"
-// segment is very unlikely to ever match a real incoming request path; it
-// silently falls through to the SPA catch-all every time. This predates the
-// invite-code change entirely (unchanged since eb251e31) and is a real,
-// separate federation-discovery bug — NodeInfo is unreachable on every
-// Kowloon server right now. Flagged, deliberately NOT fixed here (out of
-// scope for this change) — filed as its own follow-up.
-test("the public profile reports openRegistrations: false", async () => {
+// NodeInfo 2.0 is reachable again as of this test (see routes/nodeinfo/) —
+// it used to 404 here (and, it turned out, in the real deployed server too)
+// because routes/well-known/index.js reached for it via
+// router.use("/../nodeinfo/2.0", nodeinfo20), a relative-path trick that
+// could never work: Express mount paths are plain string prefixes matched
+// against req.url, not filesystem-style paths, so a literal "/../" segment
+// never matches a real request and the request fell through to the SPA
+// catch-all every time. Moved to its own top-level route directory instead —
+// the same pattern routes/config/ already uses — which needs no trick at all.
+test("the public profile and NodeInfo report openRegistrations: false", async () => {
   const profile = await admin.request("/profile");
   expect(profile.json.openRegistrations).toBe(false);
+
+  const nodeinfo = await admin.request("/nodeinfo/2.0");
+  expect(nodeinfo.status).toBe(200);
+  expect(nodeinfo.json.openRegistrations).toBe(false);
+  expect(nodeinfo.json.version).toBe("2.0");
 });
 
 // /config.json (the frontend's runtime-config bootstrap) no longer carries a
@@ -162,4 +163,20 @@ test("the public profile reports openRegistrations: false", async () => {
 test("/config.json no longer exposes registrationIsOpen", async () => {
   const { json } = await admin.request("/config.json");
   expect(json).not.toHaveProperty("registrationIsOpen");
+});
+
+// The whole discovery chain, not just the endpoint in isolation: a fediverse
+// tool starts at .well-known, follows the link it's given, and expects to
+// land on real NodeInfo JSON — not the app's own SPA shell.
+test("the .well-known discovery link actually resolves to NodeInfo JSON", async () => {
+  const discovery = await admin.request("/.well-known/nodeinfo");
+  const link = discovery.json.links?.find(
+    (l) => l.rel === "http://nodeinfo.diaspora.software/ns/schema/2.0"
+  );
+  expect(link?.href).toMatch(/\/nodeinfo\/2\.0$/);
+
+  const path = new URL(link.href).pathname;
+  const { status, json } = await admin.request(path);
+  expect(status).toBe(200);
+  expect(json.version).toBe("2.0");
 });
