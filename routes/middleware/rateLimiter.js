@@ -106,6 +106,17 @@ export const strictRateLimiter = createRateLimiter({
   message: "Too many requests, please try again later",
 });
 
+// For GET /lookup: now that it's reachable from a user-typed "go to any ID"
+// search box (not just trusted internal call sites), an unauthenticated ID
+// guessing/enumeration script hitting it repeatedly should be slowed down —
+// but a person legitimately pasting several links in a session shouldn't be,
+// so this is far more generous than strictRateLimiter.
+export const lookupRateLimiter = createRateLimiter({
+  windowMs: 5 * 60 * 1000, // 5 minutes
+  max: 60,
+  message: "Too many lookup requests, please try again later",
+});
+
 // ── Activity deduplicator ─────────────────────────────────────────────────────
 // Rejects identical activities submitted back-to-back within a short window.
 // Catches double-clicks and accidental resubmissions without touching the DB.
