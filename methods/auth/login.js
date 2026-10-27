@@ -31,7 +31,7 @@ export default async function login(input, maybePassword = "") {
   const query = actorId ? { id: actorId } : { username, originDomain: getSetting("domain") };
   const userDoc = await User.findOne(query)
     .select(
-      "id username type profile prefs publicKey password lastLogin circles emailVerified"
+      "id username type profile prefs publicKey password lastLogin circles emailVerified active"
     )
     .lean(false); // need a Mongoose doc to call instance methods
 
@@ -39,6 +39,10 @@ export default async function login(input, maybePassword = "") {
 
   const ok = await userDoc.verifyPassword(password); // bcrypt compare via schema method
   if (!ok) return { error: "Invalid credentials" };
+
+  // Deactivated/deleted account -- same generic message as a wrong password,
+  // not a distinguishing one, to avoid confirming the account ever existed.
+  if (userDoc.active === false) return { error: "Invalid credentials" };
 
   if (getSetting("requireEmailVerification") === true && !userDoc.emailVerified) {
     return { error: "Please verify your email address before logging in.", unverified: true };

@@ -44,6 +44,25 @@ function extractToken(req) {
   return token || "";
 }
 
+// Real session revocation: a deleted or deactivated account's existing JWTs
+// (which never expire -- see methods/generate/token.js) must stop working on
+// their very next request, not just whenever they'd naturally expire. No
+// separate "tokensInvalidAfter" field needed -- the row being gone or
+// flagged inactive IS the revocation signal. One cheap indexed lookup;
+// attachUserFromToken runs exactly once per request (see the early-return
+// above), so this isn't a hot-path concern.
+async function isAccountUsable(id) {
+  try {
+    const { User } = await import("#schema");
+    const row = await User.findOne({ id }).select("active").lean();
+    return !!row && row.active !== false;
+  } catch {
+    // Fail open on an unexpected DB hiccup -- same posture as the rest of
+    // this file, which never hard-fails auth on infra errors.
+    return true;
+  }
+}
+
 async function attachUserFromToken(req) {
   if (req.user && req.user.id) return true;
   const token = extractToken(req);
@@ -68,11 +87,12 @@ async function attachUserFromToken(req) {
 
     const id =
       payload?.user?.id || payload?.id || payload?.sub || payload?.actorId;
-    if (id) {
+    if (id && (await isAccountUsable(id))) {
       req.user = payload.user ? payload.user : { id };
       if (DEV) console.log(`ROUTE auth: attached (RS256) → ${req.user.id}`);
       return true;
     }
+    if (id && DEV) console.warn(`ROUTE auth: token valid but account revoked → ${id}`);
   } catch (e) {
     if (DEV) console.warn("ROUTE auth: RS256 verify failed:", e.message);
   }
@@ -84,7 +104,7 @@ async function attachUserFromToken(req) {
       const { payload } = await jwtVerify(token, secretKey);
       const id =
         payload?.user?.id || payload?.id || payload?.sub || payload?.actorId;
-      if (id) {
+      if (id && (await isAccountUsable(id))) {
         req.user = payload.user ? payload.user : { id };
         if (DEV) console.log(`ROUTE auth: attached (HMAC) → ${req.user.id}`);
         return true;

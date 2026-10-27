@@ -4,6 +4,7 @@ import loginRouter from "./login.js";
 import forgotPasswordRouter from "./forgot-password.js";
 import resetPasswordRouter from "./reset-password.js";
 import changePasswordRouter from "./change-password.js";
+import deleteAccountRouter from "./delete-account.js";
 import verifyEmailRouter from "./verify-email.js";
 import resendVerificationRouter from "./resend-verification.js";
 import meRoute from "./me.js";
@@ -31,6 +32,7 @@ router.post("/login", loginRouter);
 router.use("/", forgotPasswordRouter);
 router.use("/", resetPasswordRouter);
 router.use("/", changePasswordRouter);
+router.use("/", deleteAccountRouter);
 router.use("/", resendVerificationRouter);
 
 export default router;
