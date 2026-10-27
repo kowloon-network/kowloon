@@ -137,15 +137,23 @@ export default async function deleteAccountCascade(actorId) {
     { $pull: { members: { id: actorId } }, $inc: { memberCount: -1 } }
   );
 
-  // Bulk-tombstone content. Bookmark uses `ownerId`, NOT `actorId` -- the
-  // schema has a shadowed/deprecated second `actorId` key, and the real
-  // owner field every Bookmark is normalized onto at save time is `ownerId`.
+  // Bulk-tombstone content. Bookmark is matched on EITHER `ownerId` or
+  // `actorId` -- the schema has a shadowed/deprecated second `actorId` key
+  // and a pre-save normalization meant to backfill `ownerId` from it, but
+  // live testing on kwln.dev found a real bookmark with `actorId` set and
+  // `ownerId` genuinely absent (the two-phase create -- actorId attached on
+  // a second save, after the pre-save hook's isNew backfill already ran --
+  // likely never re-runs the backfill). Matching both fields is the safe
+  // fix; this is a pre-existing bug independent of this cascade.
   const tombstone = TOMBSTONE(actorId);
   await Promise.all([
     Post.updateMany({ actorId }, { $set: tombstone }),
     Reply.updateMany({ actorId }, { $set: tombstone }),
     Page.updateMany({ actorId }, { $set: tombstone }),
-    Bookmark.updateMany({ ownerId: actorId }, { $set: tombstone }),
+    Bookmark.updateMany(
+      { $or: [{ ownerId: actorId }, { actorId }] },
+      { $set: tombstone }
+    ),
   ]);
 
   // Reactions: hard-delete (no structural reason to keep a tombstoned
