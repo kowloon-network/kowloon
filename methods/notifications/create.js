@@ -181,7 +181,8 @@ function generateSummary(type, actorName, objectType) {
  * Generate href for notification
  */
 function generateHref(type, objectId, objectType) {
-  const { domain, protocol } = getServerSettings();
+  const { domain } = getServerSettings();
+  const protocol = domain === "localhost" ? "http" : "https";
   const baseUrl = `${protocol}://${domain}`;
 
   if (!objectId) {
