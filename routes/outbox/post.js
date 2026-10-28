@@ -5,6 +5,7 @@ import getSettings from "#methods/settings/get.js";
 import createActivity from "#methods/activities/create.js"; // fallback creator
 import proxyOutbox from "#methods/oauth/proxyOutbox.js";
 import { isDomainBlockedByUser } from "#methods/oauth/tokens.js";
+import isServerAdmin from "#methods/auth/isServerAdmin.js";
 
 const isObj = (v) => v && typeof v === "object" && !Array.isArray(v);
 const isNonEmptyStr = (s) => typeof s === "string" && s.trim().length > 0;
@@ -86,7 +87,19 @@ export default route(
     const label = `OUTBOX ${rid}`;
     console.time(label);
 
-    const unauthCreateUser = isCreateUserActivity(body);
+    // Create→User over the outbox is now an ADMIN-ONLY capability. It was
+    // previously reachable unauthenticated (see routes/outbox/index.js for
+    // the full note); account creation for everyone else goes through
+    // POST /register, which enforces invites, rules acknowledgement,
+    // password rules and rate limiting.
+    const createUserActivity = isCreateUserActivity(body);
+    if (createUserActivity && !(await isServerAdmin(user?.id))) {
+      setStatus(403);
+      set("error", "Creating accounts this way requires a server admin");
+      if (DEV) console.warn(`${label}: 403 non-admin Create->User refused`, { actor: user?.id });
+      console.timeEnd(label);
+      return;
+    }
 
     // Cross-server access token presented directly (this server is the
     // user's actual home server, receiving either a proxied write from a
@@ -142,7 +155,7 @@ export default route(
     // Enforce actor:
     // - For Create->User, force server actor (e.g. "@kwln.org")
     // - Otherwise, enforce the authenticated user
-    if (unauthCreateUser) {
+    if (createUserActivity) {
       if (isNonEmptyStr(domain)) {
         activity.actorId = `@${domain}`;
       } else if (!isNonEmptyStr(activity.actorId)) {
@@ -311,5 +324,5 @@ export default route(
     }
     console.timeEnd(label);
   },
-  { allowUnauthCreateUser: true, label: "OUTBOX" }
+  { label: "OUTBOX" } // allowUnauthCreateUser intentionally NOT set -- see the security note above
 );

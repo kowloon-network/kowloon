@@ -118,7 +118,12 @@ async function attachUserFromToken(req) {
 export default function route(handler, options = {}) {
   const {
     allowUnauth = undefined,
-    allowUnauthCreateUser = true,
+    // SECURITY (2026-10-28): defaulted to `true`, which let any unauthenticated
+    // POST whose body looked like a Create→User activity through the auth
+    // check on EVERY route using this wrapper. Account creation belongs to
+    // /register (invite-gated) and /admin/users (admin-only). Opt in per-route
+    // if some future route genuinely needs it.
+    allowUnauthCreateUser = false,
     label = "ROUTE",
   } = options;
 

@@ -197,7 +197,29 @@ export default async function Create(activity) {
 
     // ---- Special handling for Create → User --------------------------------
     if (type === "User") {
-      const obj = { ...activity.object };
+      // SECURITY (2026-10-28): this used to be `{ ...activity.object }` fed
+      // straight into User.create(), so the caller controlled EVERY field --
+      // `active`, `emailVerified`, `acknowledgedRules`, the signing keys, the
+      // activity counters. Combined with the (now removed) unauthenticated
+      // outbox path, that was a self-serve verified-account factory.
+      // Whitelist what a creation request may legitimately set; everything
+      // else is derived by UserSchema.pre('save') or set by the server.
+      const CREATABLE = [
+        "username",
+        "password",
+        "pass", // legacy alias, normalized just below
+        "email",
+        "profile",
+        "to",
+        "canReply",
+        "canReact",
+        "actorId",
+        "id",
+      ];
+      const obj = {};
+      for (const k of CREATABLE) {
+        if (activity.object?.[k] !== undefined) obj[k] = activity.object[k];
+      }
 
       // Accept either password or legacy "pass" field; normalize to "password"
       if (obj.pass && !obj.password) obj.password = obj.pass;

@@ -53,13 +53,18 @@ function isCreateUser(body) {
   return typeof ot === "string" && /^(User|Person)$/i.test(ot);
 }
 
-// Gate: allow unauth ONLY for Create→User; otherwise require auth
+// SECURITY (2026-10-28): this used to let ANY unauthenticated caller POST a
+// Create→User activity, which created a real, loginable account while
+// bypassing every control on /register -- invite code, rules
+// acknowledgement, email verification, password rules, rate limiting -- and
+// let the caller set protected fields like `active` and `emailVerified`
+// directly (mass assignment into User.create). Verified exploitable on a
+// live server before the fix.
+//
+// Account creation now has exactly two front doors: POST /register (public,
+// invite-gated) and POST /admin/users (server admins). Create→User over
+// /outbox additionally requires server-admin -- see routes/outbox/post.js.
 function authGate(req, res, next) {
-  const allow = req.method === "POST" && isCreateUser(req.body);
-  if (allow) {
-    if (DEV) console.log("OUTBOX authGate: bypass auth for Create→User");
-    return next();
-  }
   return requireAuth(req, res, next);
 }
 
