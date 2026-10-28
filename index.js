@@ -1,5 +1,9 @@
 // /index.js
 import "dotenv/config";
+// Must come before everything else -- @sentry/node installs global handlers
+// for uncaught exceptions and unhandled rejections at init, so anything
+// imported ahead of it could throw unreported. No-op without SENTRY_DSN.
+import "#methods/utils/errorReporting.js";
 import express from "express";
 import cookieParser from "cookie-parser";
 import cors from "cors";

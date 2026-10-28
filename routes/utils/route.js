@@ -189,6 +189,16 @@ export default function route(handler, options = {}) {
     } catch (err) {
       const msg = err?.message || String(err);
       if (DEV) console.error(`${tag}: handler threw`, err?.stack || msg);
+      // Every route error ends up here and, outside DEV, was previously
+      // invisible -- a 500 went to the client and nothing was recorded.
+      // Report it to GlitchTip (no-op without SENTRY_DSN). Deliberately
+      // sends only route/method/status, never body, headers or user id.
+      try {
+        const { reportError } = await import("#methods/utils/errorReporting.js");
+        reportError(err, { route: label, method, path, status: 500 });
+      } catch {
+        /* reporting must never mask the original error */
+      }
       res.status(500).json({ error: msg });
     }
   };
