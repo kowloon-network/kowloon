@@ -130,6 +130,29 @@ const defaultSettings = (ctx) => {
     },
 
     // ── Uploads ──────────────────────────────────────────────────────────────
+    // Error reporting for the WEB frontend. Deliberately a server setting
+    // rather than a build-time VITE_ var: Kowloon is self-hosted software,
+    // so every operator must be able to point the browser client at their
+    // OWN error tracker (or leave it empty for none) without rebuilding the
+    // image. Served via /config.json and read at startup by the frontend.
+    // The server's own reporting is separate -- that's the SENTRY_DSN env
+    // var, see methods/utils/errorReporting.js.
+    // A DSN is a publishable key: it necessarily ships inside the JS bundle,
+    // so @public read visibility is correct and not a leak.
+    errorReportingDsn: {
+      value: "",
+      summary:
+        "Sentry/GlitchTip DSN for browser error reporting. Leave empty to disable. Self-hosters should use their own.",
+      to: "@public",
+      canEdit: "@admin",
+      ui: {
+        type: "url",
+        label: "Browser Error Reporting DSN",
+        group: "integrations",
+        order: 20,
+      },
+    },
+
     maxUploadSize: {
       value: 100,
       summary: "Maximum allowed file upload size in megabytes.",

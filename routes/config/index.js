@@ -11,6 +11,10 @@ router.get("/", (_req, res) => {
     apiUrl: `https://${domain}`,
     domain,
     siteTitle: getSetting("siteTitle") || getSetting("profile")?.name || "Kowloon",
+    // Browser error-reporting DSN, empty string when disabled. Delivered at
+    // runtime so each self-hosted server points at its own tracker without
+    // rebuilding the frontend bundle.
+    errorReportingDsn: getSetting("errorReportingDsn") || "",
   });
 });
 
