@@ -151,6 +151,20 @@ const UserSchemaDef = {
       acknowledgedAt: { type: Date, default: Date.now },
     },
   ],
+
+  // Audit record of agreement to the Terms of Service and Privacy Policy.
+  // Distinct from acknowledgedRules: those are the community's behavioural
+  // rules, this is the legal agreement with the server operator. A checkbox
+  // nobody records proves nothing, so the acceptance timestamp is stored
+  // along with the revision date of each document AT THE TIME OF
+  // ACCEPTANCE -- that's what makes it possible to say later which text a
+  // given user actually agreed to, since the pages are editable.
+  acceptedTerms: {
+    _id: false,
+    acceptedAt: { type: Date },
+    termsUpdatedAt: { type: Date },
+    privacyUpdatedAt: { type: Date },
+  },
 };
 
 // Meta

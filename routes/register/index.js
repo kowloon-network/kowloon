@@ -9,7 +9,7 @@ import express from "express";
 import route from "#routes/utils/route.js";
 import generateToken from "#methods/generate/token.js";
 import getSettings from "#methods/settings/get.js";
-import { User, Invite } from "#schema";
+import { User, Invite, Page } from "#schema";
 import { strictRateLimiter } from "../middleware/rateLimiter.js";
 import { sendEmail } from "#methods/email/index.js";
 import { verificationEmail } from "#methods/email/templates.js";
@@ -223,6 +223,33 @@ const registerHandler = route(
       }));
     }
 
+    // Terms of Service + Privacy Policy agreement. Only enforced when the
+    // server has actually published those pages -- a server that hasn't run
+    // seed-legal-pages.js shouldn't be unable to register anyone.
+    // We record WHEN they agreed and the revision date of each document at
+    // that moment, so it stays possible to say which text they agreed to
+    // even after the pages are edited.
+    let acceptedTerms;
+    const legalPages = await Page.find({
+      slug: { $in: ["terms", "privacy"] },
+      deletedAt: null,
+    })
+      .select("slug updatedAt")
+      .lean();
+    if (legalPages.length > 0) {
+      if (body.acceptTerms !== true) {
+        setStatus(400);
+        set("error", "You must accept the Terms of Service and Privacy Policy to register.");
+        return;
+      }
+      const bySlug = Object.fromEntries(legalPages.map((p) => [p.slug, p.updatedAt]));
+      acceptedTerms = {
+        acceptedAt: new Date(),
+        termsUpdatedAt: bySlug.terms,
+        privacyUpdatedAt: bySlug.privacy,
+      };
+    }
+
     let verificationToken;
     if (requireEmailVerification) {
       verificationToken = crypto.randomBytes(32).toString("hex");
@@ -242,6 +269,7 @@ const registerHandler = route(
       canReply: input.canReply,
       canReact: input.canReact,
       acknowledgedRules,
+      ...(acceptedTerms && { acceptedTerms }),
       ...(requireEmailVerification && {
         emailVerified: false,
         emailVerificationToken: verificationToken,
