@@ -3,9 +3,11 @@
  * seed-legal-pages.js — publish/refresh the Terms of Service and Privacy
  * Policy pages for THIS server.
  *
+ * Publishes: terms, privacy, and (from the live rules setting) rules.
+ *
  * Deliberately separate from seed-pages.js: that script also creates about /
  * projects / contact / rules pages, which on a live server may already have
- * been edited by hand. This one touches ONLY `terms` and `privacy`.
+ * been edited by hand. This one touches ONLY those three slugs.
  *
  * Server-specific details (name, domain, admin contact) are read from
  * Settings, so the same boilerplate renders correctly on every server.
@@ -233,6 +235,27 @@ ${adminEmail}
 `;
 }
 
+function rulesMarkdown({ siteName }, rules) {
+  const body = rules
+    .map((r, i) => `${i + 1}. ${String(r.text || "").trim()}`)
+    .join("\n\n");
+  return `# Community Rules
+
+_Last updated: ${new Date().toISOString().slice(0, 10)}_
+
+These are the rules for **${siteName}**. Everyone agrees to them when they
+register, and they apply to everything posted here.
+
+${body}
+
+Breaking these may lead to content being removed or an account suspended.
+If you think something here breaks them, report it in the app.
+
+See also the [Terms of Service](/pages/terms) and
+[Privacy Policy](/pages/privacy).
+`;
+}
+
 async function main() {
   const uri =
     process.env.MONGO_URI ||
@@ -265,6 +288,20 @@ async function main() {
       content: privacyMarkdown(ctx),
     },
   ];
+
+  // Community rules are stored in Settings and shown at registration, but
+  // were unreadable afterwards -- and the site footer links here. Rendered
+  // from the live setting, so RE-RUN THIS SCRIPT (with --force) after
+  // editing the rules in admin, or the page goes stale.
+  const rules = Array.isArray(getSetting("rules")) ? getSetting("rules") : [];
+  if (rules.length > 0) {
+    defs.push({
+      slug: "rules",
+      title: "Community Rules",
+      summary: "The rules everyone agrees to when they join this server.",
+      content: rulesMarkdown(ctx, rules),
+    });
+  }
 
   for (const def of defs) {
     const existing = await Page.findOne({ slug: def.slug, deletedAt: null });
