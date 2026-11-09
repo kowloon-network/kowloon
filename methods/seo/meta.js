@@ -4,6 +4,7 @@
 
 import { FeedItems, User, Group, Page } from "#schema";
 import { getSetting } from "#methods/settings/cache.js";
+import { gateUserProfile } from "#methods/sanitize/object.js";
 import resolveRequestDomain from "./resolveRequestDomain.js";
 
 function excerpt(html, maxLen = 200) {
@@ -134,14 +135,20 @@ export async function fetchMeta(pathname, req) {
   const userMatch = pathname.match(/^\/users\/(.+)$/);
   if (userMatch) {
     const userId = decodeURIComponent(userMatch[1]);
-    const user = await User.findOne({ id: userId, active: true }).lean();
+    const user = await User.findOne({ id: userId, active: true, deletedAt: null }).lean();
     if (!user) return defaults;
-    const name = user.profile?.name || user.username;
-    const image = resolveImageUrl(user.profile?.icon, domain, proto) || siteHero || siteIcon;
+    // SECURITY: crawlers are anonymous. A profile whose audience isn't
+    // @public gets only the generic site meta, and personal fields
+    // (description, ...) go through the same anonymous-viewer gate the API
+    // uses (gateUserProfile), so OG/JSON-LD never leaks what /users/:id hides.
+    if ((user.to || "@public") !== "@public") return defaults;
+    const profile = gateUserProfile(user, null);
+    const name = profile.name || user.username;
+    const image = resolveImageUrl(profile.icon, domain, proto) || siteHero || siteIcon;
     return {
       ...defaults,
       title: `${name} — ${siteName}`,
-      description: excerpt(user.profile?.description || `${name} on ${siteName}`),
+      description: excerpt(profile.description || `${name} on ${siteName}`),
       image,
       type: "profile",
       kowloonId: user.id,
@@ -150,7 +157,7 @@ export async function fetchMeta(pathname, req) {
         "@context": "https://schema.org",
         "@type": "Person",
         name,
-        description: user.profile?.description || "",
+        description: profile.description || "",
         image,
         url: `${base}${pathname}`,
       }),
@@ -190,7 +197,9 @@ export async function fetchMeta(pathname, req) {
     const page =
       (await Page.findOne({ id: idOrSlug, deletedAt: null }).lean()) ||
       (await Page.findOne({ slug: idOrSlug, deletedAt: null }).lean());
-    if (!page) return defaults;
+    // SECURITY: crawler meta is anonymous -- only @public pages get
+    // page-specific title/excerpt (GET /pages lists only @public pages too).
+    if (!page || page.to !== "@public") return defaults;
     const image = resolveImageUrl(page.image, domain, proto) || siteHero || siteIcon;
     return {
       ...defaults,

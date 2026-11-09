@@ -11,6 +11,7 @@
 import route from "../utils/route.js";
 import { User } from "#schema";
 import { getSetting } from "#methods/settings/cache.js";
+import { safeFetch } from "#methods/utils/safeUrl.js";
 
 const REMOTE_HANDLE_RE = /^@?([^@]+)@([^@]+\.[^@]+)$/;
 const SERVER_HANDLE_RE = /^@([^@]+\.[^@]+)$/;
@@ -21,7 +22,10 @@ async function proxySearch(domain, q) {
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), 8000);
   try {
-    const res = await fetch(url, {
+    // SECURITY: the domain here is user-supplied (a handle or id), so route the
+    // request through the shared SSRF guard (blocks internal hosts, re-checks
+    // every redirect hop).
+    const res = await safeFetch(url, {
       headers: { Accept: "application/json" },
       signal: ctrl.signal,
     });

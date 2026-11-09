@@ -501,13 +501,21 @@ async function main() {
     const target = randEl(reactables);
     const choice = randEl(reactEmojis); // { name, emoji }
 
-    const rx = await React.create({
-      actorId: reactor.id,
-      target: target.id,
-      name: choice.name,
-      emoji: choice.emoji,
-      meta: { runId: RUN_ID },
-    });
+    // React has a unique {actorId, target} index (one reaction per user per
+    // target); random picks can repeat a pair, so skip those instead of dying.
+    let rx;
+    try {
+      rx = await React.create({
+        actorId: reactor.id,
+        target: target.id,
+        name: choice.name,
+        emoji: choice.emoji,
+        meta: { runId: RUN_ID },
+      });
+    } catch (err) {
+      if (err?.code === 11000) continue;
+      throw err;
+    }
     reacts.push(rx);
   }
 

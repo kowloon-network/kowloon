@@ -91,9 +91,39 @@ export default route(
     // Normalize activity to extract actorId for verification
     const actorId = body.actorId || body.actor?.id || body.actor;
 
+    // SECURITY (2026-11-09): nothing legitimately arrives at our inbox claiming
+    // to be one of OUR OWN users -- local users act through /outbox. The
+    // group fan-out path below skips the actor/signer domain check, and the
+    // attacker chooses the group id (and so its domain), so a forged
+    // `actorId: "@victim@<us>"` there let any server act as any local user
+    // (change their email, delete posts, deactivate accounts). Refuse
+    // outright, along with non-string actor/to values.
+    if (typeof actorId !== "string" || !actorId) {
+      setStatus(400);
+      set({ error: "Missing or invalid actorId" });
+      return;
+    }
+    if (body.to !== undefined && typeof body.to !== "string" && !Array.isArray(body.to)) {
+      setStatus(400);
+      set({ error: "Invalid to" });
+      return;
+    }
+    const ownDomain = String(getSetting("domain") || process.env.DOMAIN || "").toLowerCase();
+    const isOwnActor = (id) =>
+      typeof id === "string" &&
+      id.includes("@") &&
+      id.slice(id.lastIndexOf("@") + 1).toLowerCase() === ownDomain;
+    let actorHost = null;
+    try { actorHost = new URL(actorId).hostname.toLowerCase(); } catch (_) {}
+    if (isOwnActor(actorId) || actorHost === ownDomain) {
+      setStatus(403);
+      set({ error: "Activities from local actors must use /outbox" });
+      return;
+    }
+
     // For group fan-out: the group server signs and re-broadcasts activities from another server.
     // The actorId domain won't match the keyId domain in this case, so skip domain check.
-    const isGroupFanout = body.to?.startsWith("group:");
+    const isGroupFanout = typeof body.to === "string" && body.to.startsWith("group:");
     const sigActorId = isGroupFanout ? null : actorId;
 
     // 1) Verify origin server (HTTP Signature with domain verification)
@@ -188,6 +218,13 @@ export default route(
       _federation: { domain: sig.domain, keyId: sig.keyId },
     };
     const activity = normalizeInboundActivity(rawActivity);
+    // Re-check after normalization: an actor URL like
+    // https://<us>/users/victim becomes "@victim@<us>" only at this point.
+    if (isOwnActor(activity.actorId)) {
+      setStatus(403);
+      set({ error: "Activities from local actors must use /outbox" });
+      return;
+    }
 
     // 5) Upsert Inbox envelope (idempotent on remoteId if present)
     const remoteId = activity.remoteId;

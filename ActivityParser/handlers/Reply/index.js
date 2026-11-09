@@ -20,6 +20,7 @@ import { getServerSettings } from "#methods/settings/schemaHelpers.js";
 import getMultiFederationTargets from "../utils/getMultiFederationTargets.js";
 import { authorizeInteraction } from "#methods/feed/visibility.js";
 import resolveAttachments from "#methods/files/resolveAttachment.js";
+import buildActorEmbed from "../utils/buildActorEmbed.js";
 
 /**
  * Validate Reply activity
@@ -156,7 +157,11 @@ export default async function Reply(activity, ctx = {}) {
     // 2. Build the Reply document
     const replyData = {
       actorId,
-      actor: activity.actor || {},
+      // SECURITY: built server-side from the User doc for local replies
+      // (client-supplied activity.actor used to be trusted verbatim, letting
+      // a user reply under someone else's name/avatar). Inbound federated
+      // replies keep the signing server's embed -- see buildActorEmbed.
+      actor: await buildActorEmbed(activity),
       target: rootId,
       parent: parentId,
       to: "",

@@ -15,7 +15,7 @@
 import { Circle, File } from "#schema";
 import { getStorageAdapter } from "#methods/files/index.js";
 import { getSetting } from "#methods/settings/cache.js";
-import { isSafeUrl } from "#methods/utils/safeUrl.js";
+import { isSafeUrl, safeFetch } from "#methods/utils/safeUrl.js";
 import logger from "#methods/utils/logger.js";
 import generateCircleIcon from "./generateCircleIcon.js";
 
@@ -60,9 +60,9 @@ async function fetchAvatarBuffer(iconUrl, localDomain, storage) {
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), FETCH_TIMEOUT_MS);
     try {
-      const res = await fetch(iconUrl, {
+      // SECURITY: safeFetch re-checks every redirect hop against the SSRF guard.
+      const res = await safeFetch(iconUrl, {
         signal: ctrl.signal,
-        redirect: "follow",
         headers: { "User-Agent": "kowloon/1.0 (+circle-icon)" },
       });
       if (!res.ok) return null;

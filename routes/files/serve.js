@@ -22,6 +22,7 @@ import { getStorageAdapter } from '#methods/files/index.js';
 import isLocalDomain from '#methods/parse/isLocalDomain.js';
 import { hydrateRemoteFile } from '#methods/files/hydrateRemoteFile.js';
 import { authorizeFileAccess, normalizeVisibility } from '#methods/files/authorizeFileAccess.js';
+import { ALLOWED_MIME_TYPES } from '#methods/files/validateUpload.js';
 
 export default async function serve(req, res) {
   const fileId = req.params.id;
@@ -85,9 +86,25 @@ export default async function serve(req, res) {
 
     // Thumbnails are generated as webp; originals carry their own mediaType.
     const isThumb = !!(sizeParam && file.thumbnails?.[sizeParam]);
+    // SECURITY: only allowlisted upload types are served with their own
+    // Content-Type; anything else (e.g. a text/html mediaType planted by a
+    // remote origin's /meta) is served as an opaque download. nosniff stops
+    // the browser second-guessing, and non-media is forced to `attachment`
+    // so nothing renders as a document on our origin.
+    const storedType = String(file.mediaType || '').toLowerCase().split(';')[0].trim();
     const contentType = isThumb
       ? 'image/webp'
-      : file.mediaType || 'application/octet-stream';
+      : ALLOWED_MIME_TYPES.has(storedType) || /^(image\/(?!svg)|video\/|audio\/)[a-z0-9.+-]+$/.test(storedType)
+        ? storedType // allowlist, plus legacy raster/AV variants (e.g. image/jpg)
+        : 'application/octet-stream';
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    if (!/^(image|video|audio)\//.test(contentType)) {
+      res.setHeader('Content-Disposition', 'attachment');
+    }
+    if (contentType === 'image/svg+xml') {
+      // SVG opened directly is a document; neuter scripts even if sanitization missed something.
+      res.setHeader('Content-Security-Policy', "default-src 'none'; style-src 'unsafe-inline'; sandbox");
+    }
 
     // effectiveTo/file.to isn't a reliable public/private signal for a
     // remote-parented file (the origin's own File.to is almost always

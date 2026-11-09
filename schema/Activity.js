@@ -7,7 +7,7 @@ const { Schema } = mongoose;
 
 const ActivitySchema = new Schema(
   {
-    id: { type: String, key: true }, // activity:<_id>@<domain>
+    id: { type: String }, // activity:<_id>@<domain>
     type: { type: String, default: "Create" },
 
     // Actor + addressing
@@ -78,8 +78,21 @@ ActivitySchema.pre("save", async function (next) {
 
 // Helpful indexes
 ActivitySchema.index({ undoOf: 1 });
-ActivitySchema.index({ remoteId: 1 }, { sparse: true });
-ActivitySchema.index({ dedupeKey: 1 }, { sparse: true });
+// Idempotency keys are enforced by the DB, not just check-then-insert in
+// methods/activities/create.js (which races). Partial on string type so docs
+// without the key don't collide. Explicit names so they don't clash with the
+// old non-unique remoteId_1 / dedupeKey_1 indexes; those are dropped by
+// scripts/dedupe-activity-keys.js --apply (run it BEFORE deploying this).
+ActivitySchema.index(
+  { remoteId: 1 },
+  { unique: true, partialFilterExpression: { remoteId: { $type: "string" } }, name: "remoteId_unique" }
+);
+ActivitySchema.index(
+  { actorId: 1, dedupeKey: 1 },
+  { unique: true, partialFilterExpression: { dedupeKey: { $type: "string" } }, name: "actorId_dedupeKey_unique" }
+);
+// `key: true` is not a Mongoose option -- `id` was never indexed on its own.
+ActivitySchema.index({ id: 1 }, { unique: true, partialFilterExpression: { id: { $type: "string" } } });
 ActivitySchema.index({ actorId: 1, id: 1 });
 ActivitySchema.index({ actorId: 1, type: 1 });
 ActivitySchema.index({ "audit.appliedAt": 1 }, { sparse: true });

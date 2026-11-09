@@ -52,7 +52,7 @@ const slugify = function (str) {
 
 const PageSchema = new Schema(
   {
-    id: { type: String, key: true },
+    id: { type: String },
     // Local domain on create; the source domain when hydrated from a remote
     // server (a cached shadow of a remote page). Matches Post/Circle/Group/etc.
     originDomain: { type: String, default: () => getServerSettings()?.domain },
@@ -101,6 +101,11 @@ PageSchema.index({
 });
 
 PageSchema.index({ type: 1, "attachments.kind": 1 });
+
+// `key: true` is not a Mongoose option -- `id` was never indexed, so every
+// findOne({ id }) was a collection scan. Partial (string-only) so any legacy
+// doc missing `id` can't block the unique build.
+PageSchema.index({ id: 1 }, { unique: true, partialFilterExpression: { id: { $type: "string" } } });
 
 PageSchema.pre("save", async function (next) {
   try {

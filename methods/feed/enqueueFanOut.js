@@ -253,8 +253,14 @@ export default async function enqueueFeedFanOut({
         });
       } else {
         // Private group: N records per member
+        // Group has no top-level `members` -- they live in the Circle at
+        // group.circles.members. Reading group.members fanned out to nobody
+        // but the author.
         const memberIds = new Set();
-        for (const member of group.members || []) {
+        const membersCircle = group.circles?.members
+          ? await Circle.findOne({ id: group.circles.members }).select("members.id").lean()
+          : null;
+        for (const member of membersCircle?.members || []) {
           if (member.id) memberIds.add(member.id);
         }
 

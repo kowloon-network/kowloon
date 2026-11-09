@@ -4,7 +4,7 @@
 
 import { getStorageAdapter } from './StorageManager.js';
 import { validateUpload } from './validateUpload.js';
-import { isSafeUrl } from '#methods/utils/safeUrl.js';
+import { isSafeUrl, safeFetch } from '#methods/utils/safeUrl.js';
 import File from '#schema/File.js';
 import { Post, FeedItems } from '#schema';
 import getSettings from '#methods/settings/get.js';
@@ -24,19 +24,17 @@ export default async function proxyExternalImage({ url, actorId, postId }) {
     const settings = await getSettings();
     const domain = settings?.domain || process.env.DOMAIN || 'localhost';
 
-    // Fetch with timeout
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
-
+    // SECURITY: safeFetch re-checks the SSRF guard on every redirect hop
+    // (fetch's redirect:'follow' only had the first URL checked above) and
+    // its timeout also covers reading the body.
     let res;
     try {
-      res = await fetch(url, {
-        signal: controller.signal,
+      res = await safeFetch(url, {
+        timeout: TIMEOUT_MS,
         headers: { 'User-Agent': 'kowloon/1.0 (+image-proxy)' },
-        redirect: 'follow',
       });
-    } finally {
-      clearTimeout(timer);
+    } catch {
+      return;
     }
 
     if (!res.ok) return;

@@ -84,6 +84,70 @@ async function updateMemberFetchedAt(circleId, circle, memberIds) {
   }
 }
 
+// Per-circle throttle for the background remote pull in getTimeline().
+// In-memory and per-process (best effort); size-capped so it can't grow
+// without bound -- Map iteration order is insertion order, so the first key
+// is the oldest entry.
+const CIRCLE_PULL_THROTTLE_MS = 5 * 60 * 1000;
+const CIRCLE_PULL_MAX_ENTRIES = 10_000;
+const lastCirclePull = new Map();
+
+function shouldPullCircle(circleId) {
+  const now = Date.now();
+  const last = lastCirclePull.get(circleId);
+  if (last && now - last < CIRCLE_PULL_THROTTLE_MS) return false;
+  lastCirclePull.delete(circleId); // re-insert so it moves to the newest end
+  lastCirclePull.set(circleId, now);
+  while (lastCirclePull.size > CIRCLE_PULL_MAX_ENTRIES) {
+    lastCirclePull.delete(lastCirclePull.keys().next().value);
+  }
+  return true;
+}
+
+/**
+ * Pull remote members' posts for a circle (runs in the background).
+ * The `to` list is ALL local users who have any of these remote members in any
+ * circle -- not just the current viewer. This makes one pull populate FanOut for
+ * every subscriber in a single round-trip, which is the correct model: the pull
+ * is a server-level operation whose FanOut covers all local subscribers.
+ */
+async function pullCircleRemotes({ circleId, circle, viewerId, remoteMembersByDomain, limit }) {
+  const Kowloon = (await import("#kowloon")).default;
+
+  for (const [remoteDomain, remoteAuthors] of remoteMembersByDomain.entries()) {
+    try {
+      const pullSince = oldestFetchedAt(circle, remoteAuthors);
+
+      // Find everyone on this server who follows any of these remote members.
+      const allSubscribers = await findAllCircleSubscribers(remoteAuthors);
+      const pullTo = allSubscribers.length > 0 ? allSubscribers : [viewerId];
+
+      const result = await Kowloon.federation.pullFromRemote({
+        remoteDomain,
+        from: remoteAuthors,
+        to: pullTo,
+        since: pullSince,
+        limit,
+      });
+
+      // Update lastFetchedAt on success, but only if this was an incremental
+      // pull (pullSince was set) or we actually got items back. If this was a
+      // first-ever fetch (pullSince=null) and returned 0 items, don't mark it
+      // as fetched -- the remote may have had a temporary bug and we want to
+      // retry the full pull next time rather than locking into an empty window.
+      if (!result.error) {
+        const gotItems = (result.items?.length ?? 0) > 0;
+        const wasIncremental = pullSince !== null;
+        if (gotItems || wasIncremental) {
+          await updateMemberFetchedAt(circleId, circle, remoteAuthors);
+        }
+      }
+    } catch (err) {
+      logger.warn("getTimeline: remote pull failed", { circleId, remoteDomain, error: err.message });
+    }
+  }
+}
+
 /**
  * Assemble timeline for a user from a specific Circle
  *
@@ -158,39 +222,15 @@ export default async function getTimeline({
 
   // 4. Pull from remote servers (on-demand, cursor-based).
   //
-  // The `to` list is ALL local users who have any of these remote members in any
-  // circle — not just the current viewer. This makes one pull populate FanOut for
-  // every subscriber in a single round-trip, which is the correct model: the pull
-  // is a server-level operation whose FanOut covers all local subscribers.
-  const Kowloon = (await import("#kowloon")).default;
-
-  for (const [remoteDomain, remoteAuthors] of remoteMembersByDomain.entries()) {
-    const pullSince = oldestFetchedAt(circle, remoteAuthors);
-
-    // Find everyone on this server who follows any of these remote members.
-    const allSubscribers = await findAllCircleSubscribers(remoteAuthors);
-    const pullTo = allSubscribers.length > 0 ? allSubscribers : [viewerId];
-
-    const result = await Kowloon.federation.pullFromRemote({
-      remoteDomain,
-      from: remoteAuthors,
-      to: pullTo,
-      since: pullSince,
-      limit,
-    });
-
-    // Update lastFetchedAt on success, but only if this was an incremental
-    // pull (pullSince was set) or we actually got items back. If this was a
-    // first-ever fetch (pullSince=null) and returned 0 items, don't mark it
-    // as fetched — the remote may have had a temporary bug and we want to
-    // retry the full pull next time rather than locking into an empty window.
-    if (!result.error) {
-      const gotItems = (result.items?.length ?? 0) > 0;
-      const wasIncremental = pullSince !== null;
-      if (gotItems || wasIncremental) {
-        await updateMemberFetchedAt(circleId, circle, remoteAuthors);
-      }
-    }
+  // Fire-and-forget, first page only, throttled per circle. This used to be
+  // awaited inline -- sequentially per remote domain, 30s timeout each, on
+  // EVERY page -- so one slow peer stalled the whole circle feed. The
+  // scheduled federation pull workers already keep FanOut fresh; this is just
+  // a best-effort nudge so a freshly-opened circle catches up soon.
+  if (!before && remoteMembersByDomain.size > 0 && shouldPullCircle(circleId)) {
+    pullCircleRemotes({ circleId, circle, viewerId, remoteMembersByDomain, limit }).catch((err) =>
+      logger.warn("getTimeline: background remote pull failed", { circleId, error: err.message })
+    );
   }
 
   // 5. Get blocked/muted users

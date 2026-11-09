@@ -17,6 +17,7 @@ import { canSeeFolderChain } from "#methods/bookmarks/visibility.js";
 import { getSetting } from "#methods/settings/cache.js";
 import kowloonId from "#methods/parse/kowloonId.js";
 import isLocalDomain from "#methods/parse/isLocalDomain.js";
+import { safeFetch } from "#methods/utils/safeUrl.js";
 
 const SELECT =
   "id type title summary href target image tags to parentFolder actorId url body createdAt updatedAt";
@@ -43,10 +44,12 @@ async function fetchRemoteBookmarks(userId, remoteDomain, query) {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), 8000);
   try {
-    const res = await fetch(url, {
+    // SECURITY: the domain here is user-supplied (a handle or id), so route the
+    // request through the shared SSRF guard (blocks internal hosts, re-checks
+    // every redirect hop).
+    const res = await safeFetch(url, {
       method: "GET",
       headers: { Accept: "application/json" },
-      redirect: "follow",
       signal: ctrl.signal,
     });
     if (!res.ok) return { orderedItems: [], totalItems: 0 };
@@ -89,7 +92,13 @@ export default route(async ({ req, params, query, user, set, setStatus }) => {
   const isOwner = !!viewerId && viewerId === userId;
   const ctx = await getViewerContext(viewerId);
 
-  const parentFolder = query.parentFolder;
+  // SECURITY: coerce to plain strings before these reach a Mongo filter --
+  // `?parentFolder[$ne]=x` / `?type[$regex]=` would otherwise be operator
+  // objects (also stripped globally by routes/middleware/sanitizeQuery.js;
+  // this is belt-and-braces for arrays and any future parser change).
+  const asStr = (v) => (Array.isArray(v) ? asStr(v[0]) : typeof v === "string" ? v : undefined);
+  const parentFolder = asStr(query.parentFolder);
+  const typeParam = asStr(query.type);
   const wantsFolderContents = parentFolder && parentFolder !== "root";
 
   // Walking *into* a folder requires the whole ancestor chain to be visible —
@@ -107,9 +116,9 @@ export default route(async ({ req, params, query, user, set, setStatus }) => {
   const visibilityFilter = isOwner ? { deletedAt: null } : buildVisibilityQuery(ctx);
 
   const scoping = { actorId: userId, deletedAt: null };
-  if (query.type) scoping.type = query.type;
+  if (typeParam) scoping.type = String(typeParam);
   if (wantsFolderContents) {
-    scoping.parentFolder = parentFolder;
+    scoping.parentFolder = String(parentFolder);
   } else if (parentFolder === "root" || !isOwner) {
     // Explicit root request OR a non-owner — never leak descendants here.
     scoping.parentFolder = { $in: [null, undefined] };

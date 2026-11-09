@@ -1,11 +1,14 @@
 import express from "express";
-import { getLinkPreview } from "link-preview-js";
+import { getPreviewFromContent } from "link-preview-js";
 import route from "../utils/route.js";
-import { isSafeUrl } from "#methods/utils/safeUrl.js";
+import { isSafeUrl, safeFetch } from "#methods/utils/safeUrl.js";
+import { canView, buildFollowerMap } from "#methods/feed/visibility.js";
+import { getViewerContext } from "#methods/visibility/context.js";
+import { canSeeObject } from "#methods/visibility/helpers.js";
 import { getSetting } from "#methods/settings/cache.js";
 import { buildFileUrl } from "#methods/files/signedUrl.js";
 import fetchRemoteServerProfile from "#methods/federation/fetchRemoteServerProfile.js";
-import { Page, Post } from "#schema";
+import { Page, Post, FeedItems } from "#schema";
 
 const router = express.Router({ mergeParams: true });
 
@@ -103,8 +106,8 @@ async function fetchOEmbed(rawUrl) {
   const provider = OEMBED_PROVIDERS.find((p) => p.test(u));
   if (!provider) return null;
   try {
-    const res = await fetch(provider.endpoint(rawUrl), {
-      signal: AbortSignal.timeout(6000),
+    const res = await safeFetch(provider.endpoint(rawUrl), {
+      timeout: 6000,
       headers: { Accept: "application/json" },
     });
     if (!res.ok) return null;
@@ -121,23 +124,69 @@ async function fetchOEmbed(rawUrl) {
   }
 }
 
+// Cap on how much HTML we'll buffer for a preview (OG tags live in <head>).
+const PREVIEW_MAX_BYTES = 2 * 1024 * 1024;
+
+async function readCapped(res, max) {
+  if (!res.body) return "";
+  const reader = res.body.getReader();
+  const chunks = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > max) {
+      chunks.push(value.subarray(0, value.byteLength - (total - max)));
+      try { await reader.cancel(); } catch {}
+      break;
+    }
+    chunks.push(value);
+  }
+  return Buffer.concat(chunks.map((c) => Buffer.from(c))).toString("utf8");
+}
+
+// SECURITY: we fetch the page ourselves through safeFetch() -- which
+// re-checks the SSRF guard on EVERY redirect hop -- and hand the HTML to
+// link-preview-js's parser. Letting the library fetch with
+// followRedirects:"follow" meant only the first URL was checked, so any
+// public URL could 302 us into the internal network.
+async function scrape(url, headers) {
+  const res = await safeFetch(url, { headers, timeout: PREVIEW_TIMEOUT_MS });
+  const respHeaders = {};
+  res.headers.forEach((v, k) => { respHeaders[k] = v; });
+  const data = await readCapped(res, PREVIEW_MAX_BYTES);
+  return getPreviewFromContent({ url: res.url || url, headers: respHeaders, data });
+}
+
 async function fetchPreview(url) {
-  const opts = { followRedirects: "follow", timeout: PREVIEW_TIMEOUT_MS };
   let preview = null;
   try {
-    preview = await getLinkPreview(url, { ...opts, headers: PREVIEW_HEADERS });
+    preview = await scrape(url, PREVIEW_HEADERS);
   } catch {
     preview = null;
   }
   if (looksBlocked(preview)) {
     try {
-      const alt = await getLinkPreview(url, { ...opts, headers: FB_HEADERS });
+      const alt = await scrape(url, FB_HEADERS);
       if (!looksBlocked(alt)) return alt;
     } catch {
       /* keep the original */
     }
   }
   return preview;
+}
+
+// Same visibility rule as GET /posts/:id: the FeedItems row + canView().
+async function viewerCanSeeLocalPost(postId, viewerId) {
+  const item = await FeedItems.findOne({
+    id: postId,
+    deletedAt: null,
+    tombstoned: { $ne: true },
+  }).lean();
+  if (!item) return false;
+  const followerMap = await buildFollowerMap([item.actorId]);
+  return canView(item, viewerId, { followerMap });
 }
 
 // Recognize a Kowloon object URL by the prefixed, server-qualified ID in its
@@ -182,8 +231,8 @@ function resolveImageUrl(img, domain, protocol) {
 router.get(
   "/",
   route(
-    async ({ req, query, set, setStatus }) => {
-      const { url } = query;
+    async ({ req, query, user, set, setStatus }) => {
+      const url = typeof query.url === "string" ? query.url : null;
 
       if (!url) {
         setStatus(400);
@@ -234,10 +283,13 @@ router.get(
           const mPost = parsed.pathname.match(/^\/posts\/(post:[^/?#]+@[^/?#]+)/);
           if (mPost) {
             const postId = decodeURIComponent(mPost[1]);
-            const post = await Post.findOne({ id: postId })
+            const post = await Post.findOne({ id: postId, deletedAt: null })
               .select("title summary source image type")
               .lean();
-            if (post) {
+            // SECURITY: only reveal a post's title/excerpt to a viewer who
+            // could open it -- same check as GET /posts/:id (routes/posts/id.js).
+            // Otherwise fall through to the generic site preview below.
+            if (post && (await viewerCanSeeLocalPost(postId, user?.id || null))) {
               const body = post.source?.content || "";
               set("url", url);
               set("title", post.title || body.slice(0, 100) || null);
@@ -259,11 +311,14 @@ router.get(
           if (mPage) {
             const slugOrId = decodeURIComponent(mPage[1]);
             const page = await Page.findOne({
-              $or: [{ slug: slugOrId }, { id: slugOrId }],
+              $or: [{ slug: String(slugOrId) }, { id: String(slugOrId) }],
+              deletedAt: null,
             })
-              .select("title summary source image")
+              .select("title summary source image to actorId objectType")
               .lean();
-            if (page) {
+            // SECURITY: honour the page's own `to` (same canSeeObject check
+            // as routes/pages/id.js); otherwise generic site preview below.
+            if (page && (await canSeeObject(page, await getViewerContext(user?.id || null)))) {
               const body = page.source?.content || "";
               set("url", url);
               set("title", page.title || null);
@@ -307,12 +362,9 @@ router.get(
         }
       }
 
-      // SSRF guard: resolve the host and reject loopback/private/link-local/IPv6
-      // targets before link-preview-js makes any request. This is our protection
-      // against GHSA-4gp8-rjrq-ch6q — the library's own resolveDNSHost hook is
-      // unusable here (it forces a raw-IP connection that breaks HTTPS TLS), so
-      // this pre-check is the guard. Residual: redirect *targets* aren't re-checked
-      // (the lib follows them internally); acceptable on this authenticated route.
+      // SSRF guard: fail fast with a 400 for an obviously unsafe URL. The
+      // actual fetches below go through safeFetch(), which re-checks every
+      // redirect hop as well (GHSA-4gp8-rjrq-ch6q and redirect-to-internal).
       if (!await isSafeUrl(url)) {
         setStatus(400);
         set("error", "URL is not allowed");

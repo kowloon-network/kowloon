@@ -51,15 +51,62 @@ function extractToken(req) {
 // flagged inactive IS the revocation signal. One cheap indexed lookup;
 // attachUserFromToken runs exactly once per request (see the early-return
 // above), so this isn't a hot-path concern.
-async function isAccountUsable(id) {
+//
+// Also enforces User.tokensValidAfter (2026-11-09): a password change or
+// reset stamps it, and any token issued before that instant (or with no
+// `iat` at all -- every token minted before iat was added) stops working,
+// so changing your password really does sign out your other devices.
+//
+// SECURITY (2026-11-09): no longer fails OPEN. A DB error used to return
+// true, silently disabling revocation. It now throws AuthUnavailable, which
+// the wrapper turns into a 503 -- deliberately NOT a 401, because clients
+// (mobile's onUnauthorized) sign the user out on 401, and a Mongo blip must
+// not log everyone out either.
+class AuthUnavailable extends Error {}
+async function isAccountUsable(id, iat) {
   try {
     const { User } = await import("#schema");
-    const row = await User.findOne({ id }).select("active").lean();
-    return !!row && row.active !== false;
-  } catch {
-    // Fail open on an unexpected DB hiccup -- same posture as the rest of
-    // this file, which never hard-fails auth on infra errors.
+    const row = await User.findOne({ id })
+      .select("active tokensValidAfter")
+      .lean();
+    if (!row || row.active === false) return false;
+    if (row.tokensValidAfter) {
+      const issuedMs = typeof iat === "number" ? iat * 1000 : 0;
+      if (issuedMs < new Date(row.tokensValidAfter).getTime()) return false;
+    }
     return true;
+  } catch (e) {
+    throw new AuthUnavailable(e?.message || "auth lookup failed");
+  }
+}
+
+// Domain part of a Kowloon id: "@user@domain" -> "domain", "@domain" -> "domain".
+function domainOfId(id) {
+  if (typeof id !== "string") return null;
+  const at = id.lastIndexOf("@");
+  return at >= 0 ? id.slice(at + 1).toLowerCase() : null;
+}
+
+// SECURITY (2026-11-09): a visiting-session token (minted by
+// routes/oauth/exchange.js for a FOREIGN user browsing this server) is only
+// valid while its server-side VisitingIdentity row exists, and must never
+// name a LOCAL account -- an exchange that claimed a local id is exactly how
+// a forged cross-server login impersonated local admins.
+async function isVisitingSessionValid(u, localDomain) {
+  try {
+    if (!u?.sessionId || !u?.id) return false;
+    const d = domainOfId(u.id);
+    if (!d || d === localDomain) return false;
+    const { VisitingIdentity } = await import("#schema");
+    const row = await VisitingIdentity.findOne({
+      sessionId: u.sessionId,
+      userId: u.id,
+    })
+      .select("_id")
+      .lean();
+    return !!row;
+  } catch (e) {
+    throw new AuthUnavailable(e?.message || "auth lookup failed");
   }
 }
 
@@ -87,33 +134,55 @@ async function attachUserFromToken(req) {
 
     const id =
       payload?.user?.id || payload?.id || payload?.sub || payload?.actorId;
-    if (id && (await isAccountUsable(id))) {
-      req.user = payload.user ? payload.user : { id };
+    if (!id) return false;
+    const localDomain = String(issuerDomain || "").toLowerCase();
+    const u = payload.user || { id };
+
+    if (u.visiting) {
+      // Foreign identity browsing this server (see isVisitingSessionValid).
+      if (await isVisitingSessionValid(u, localDomain)) {
+        req.user = u;
+        if (DEV) console.log(`ROUTE auth: attached (visiting) → ${u.id}`);
+        return true;
+      }
+      if (DEV) console.warn(`ROUTE auth: visiting session rejected → ${id}`);
+      return false;
+    }
+
+    // Every other token this server signs is for one of ITS OWN accounts
+    // (normal sessions, and scope:"visiting" access tokens issued to a
+    // foreign server for a local user). Refuse anything naming another domain.
+    if (domainOfId(id) !== localDomain) {
+      if (DEV) console.warn(`ROUTE auth: non-local id in local token → ${id}`);
+      return false;
+    }
+
+    if (await isAccountUsable(id, payload.iat)) {
+      req.user = u;
       if (DEV) console.log(`ROUTE auth: attached (RS256) → ${req.user.id}`);
       return true;
     }
-    if (id && DEV) console.warn(`ROUTE auth: token valid but account revoked → ${id}`);
+    if (DEV) console.warn(`ROUTE auth: token valid but account revoked → ${id}`);
   } catch (e) {
+    if (e instanceof AuthUnavailable) throw e;
     if (DEV) console.warn("ROUTE auth: RS256 verify failed:", e.message);
   }
 
-  try {
-    const secret = process.env.JWT_SECRET || process.env.JWT_KEY;
-    if (secret) {
-      const secretKey = new TextEncoder().encode(secret);
-      const { payload } = await jwtVerify(token, secretKey);
-      const id =
-        payload?.user?.id || payload?.id || payload?.sub || payload?.actorId;
-      if (id && (await isAccountUsable(id))) {
-        req.user = payload.user ? payload.user : { id };
-        if (DEV) console.log(`ROUTE auth: attached (HMAC) → ${req.user.id}`);
-        return true;
-      }
-    }
-  } catch {}
-
+  // SECURITY (2026-11-09): the HS256 fallback that verified tokens against
+  // JWT_SECRET was removed. Nothing in this codebase ever signed such
+  // tokens, so it only ever served as a way to forge one -- and
+  // .env.example shipped a guessable default secret.
   return false;
 }
+
+// Shared with guards that don't use route() (routes/admin/index.js), so every
+// authenticated surface applies the same revocation + cross-domain rules.
+// Returns req.user or null; throws AuthUnavailable on a DB error.
+export async function authenticateRequest(req) {
+  await attachUserFromToken(req);
+  return req.user?.id ? req.user : null;
+}
+export { AuthUnavailable };
 
 export default function route(handler, options = {}) {
   const {
@@ -124,6 +193,17 @@ export default function route(handler, options = {}) {
     // /register (invite-gated) and /admin/users (admin-only). Opt in per-route
     // if some future route genuinely needs it.
     allowUnauthCreateUser = false,
+    // SECURITY (2026-11-09): cross-server tokens are refused everywhere by
+    // default. Two kinds exist:
+    //  - user.scope === "visiting": an access token THIS server issued to a
+    //    foreign server so it can act for one of our users. Only POST /outbox
+    //    may accept it (it enforces its own activity allowlist there).
+    //  - user.visiting === true: a session for a FOREIGN user browsing here.
+    //    Read-only (safe methods) plus routes that opt in.
+    // Before this, scope was checked on four routes only, so such a token was
+    // a full session on every other route (notifications, private circles,
+    // file deletion, push registration...).
+    allowVisiting = false,
     label = "ROUTE",
   } = options;
 
@@ -140,7 +220,16 @@ export default function route(handler, options = {}) {
     const params = (req && req.params) || {};
     const body = (req && req.body) || {};
 
-    await attachUserFromToken(req);
+    try {
+      await attachUserFromToken(req);
+    } catch (e) {
+      if (e instanceof AuthUnavailable) {
+        return res
+          .status(503)
+          .json({ error: "Temporarily unable to verify your session" });
+      }
+      throw e;
+    }
 
     const defaultAllow = SAFE_METHODS.has(method);
     const allow =
@@ -171,6 +260,17 @@ export default function route(handler, options = {}) {
     if (!req.user?.id && !allow) {
       if (DEV) console.warn(`${tag}: 401 Unauthorized (no req.user)`);
       return res.status(401).json({ error: "Unauthorized" });
+    }
+
+    if (!allowVisiting && req.user) {
+      const isAccessToken = req.user.scope === "visiting";
+      const isVisitingWrite = req.user.visiting && !SAFE_METHODS.has(method);
+      if (isAccessToken || isVisitingWrite) {
+        if (DEV) console.warn(`${tag}: 403 cross-server token refused`);
+        return res
+          .status(403)
+          .json({ error: "This action isn't available for a visiting session" });
+      }
     }
 
     try {

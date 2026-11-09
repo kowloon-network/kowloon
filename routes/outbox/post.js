@@ -152,6 +152,15 @@ export default route(
     // Build activity without mutating req.body
     const activity = { ...(body || {}) };
 
+    // SECURITY: these fields are server-internal markers. `_federation` is
+    // set only by routes/inbox/post.js after HTTP-signature verification and
+    // is how ActivityParser handlers tell a verified inbound activity apart
+    // from a local one; `federated`/`remoteId` drive federated-object id
+    // preservation and remoteId dedupe. A local client must never supply them.
+    delete activity._federation;
+    delete activity.federated;
+    delete activity.remoteId;
+
     // Enforce actor:
     // - For Create->User, force server actor (e.g. "@kwln.org")
     // - Otherwise, enforce the authenticated user
@@ -170,8 +179,10 @@ export default route(
       }
     } else {
       activity.actorId = user.id;
-      // Only set actor from JWT if client didn't already supply one
-      if (!activity.actor?.id) {
+      // SECURITY: always build the actor embed server-side from the verified
+      // JWT. It used to be kept whenever the client supplied one, letting a
+      // user publish under someone else's name/avatar.
+      {
         const baseUrl = domain ? `https://${domain}` : '';
         const userPath = `${baseUrl}/users/${encodeURIComponent(user.id)}`;
         activity.actor = {
@@ -324,5 +335,7 @@ export default route(
     }
     console.timeEnd(label);
   },
-  { label: "OUTBOX" } // allowUnauthCreateUser intentionally NOT set -- see the security note above
+  // allowVisiting: this is the ONE route that accepts cross-server tokens;
+  // it enforces its own visiting-activity allowlist above.
+  { label: "OUTBOX", allowVisiting: true } // allowUnauthCreateUser intentionally NOT set -- see the security note above
 );

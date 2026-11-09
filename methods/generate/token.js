@@ -40,6 +40,8 @@ export default async function (actorId) {
   })
     .setProtectedHeader({ alg: "RS256", kid })
     .setIssuer(`https://${settings.domain}`)
+    // iat is what User.tokensValidAfter is compared against (route.js).
+    .setIssuedAt()
     .sign(pk);
 
   return token;

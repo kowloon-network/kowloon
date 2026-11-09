@@ -17,6 +17,10 @@ const DeliverySchema = new Schema(
     attempts: { type: Number, default: 0 },
     lastAttemptAt: { type: Date, default: null },
     nextAttemptAt: { type: Date, default: null },
+    // Claim lease: set when a worker atomically claims this delivery
+    // (pending -> delivering). If the worker dies mid-send, the delivery is
+    // re-queued once the lease expires instead of being stuck forever.
+    leaseUntil: { type: Date, default: null },
     responseStatus: { type: Number, default: null },
     responseHeaders: { type: Object, default: null },
     responseBody: { type: String, default: null }, // size-capped

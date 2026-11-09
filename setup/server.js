@@ -189,6 +189,11 @@ S3_SECRET_KEY=${s3SecretKey}
 
 # ── Email (optional — notifications won't send without this) ──────────────────
 ${smtpLines}
+
+# ── Workers ───────────────────────────────────────────────────────────────────
+# Outbound federation is delivered by the worker-outbox container, so the app
+# container must not also poll the outbox queue in-process.
+DISABLE_INPROCESS_OUTBOX_WORKER=true
 `;
 
   // ── Shared services snippet (workers + minio + mongo) ──────────────────────

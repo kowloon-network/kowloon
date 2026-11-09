@@ -64,11 +64,14 @@ const handler = route(
     // Any outstanding emailed reset link is stale once the password changes.
     userDoc.passwordResetToken = undefined;
     userDoc.passwordResetExpires = undefined;
+    // Sign out every other session: tokens issued before this second are
+    // rejected by routes/utils/route.js. Second-aligned so the fresh token
+    // returned below (iat has 1s resolution) stays valid.
+    userDoc.tokensValidAfter = new Date(Math.floor(Date.now() / 1000) * 1000);
     await userDoc.save();
 
     // Hand back a fresh token so the caller's current session survives the
-    // change. Tokens are stateless RS256 JWTs, so previously-issued ones stay
-    // valid until they expire — this does NOT sign other sessions out.
+    // change; every other session was revoked via tokensValidAfter above.
     const authToken = await generateToken(userDoc.id);
     set("ok", true);
     set("token", authToken);

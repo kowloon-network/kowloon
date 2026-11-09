@@ -38,6 +38,10 @@ const handler = route(
     user.password = password;
     user.passwordResetToken = undefined;
     user.passwordResetExpires = undefined;
+    // Sign out every other session: tokens issued before this second are
+    // rejected by routes/utils/route.js. Second-aligned so the fresh token
+    // returned below (iat has 1s resolution) stays valid.
+    user.tokensValidAfter = new Date(Math.floor(Date.now() / 1000) * 1000);
     await user.save();
 
     const authToken = await generateToken(user.id);

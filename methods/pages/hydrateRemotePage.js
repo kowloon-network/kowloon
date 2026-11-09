@@ -9,6 +9,8 @@
 
 import { Page, FederatedServer } from "#schema";
 import isLocalDomain from "#methods/parse/isLocalDomain.js";
+import { safeFetch } from "#methods/utils/safeUrl.js";
+import { sanitizeRemoteHtml } from "#methods/utils/sanitizeRemote.js";
 
 const FRESH_MS = 24 * 60 * 60 * 1000; // re-fetch a shadow at most daily
 
@@ -17,7 +19,7 @@ function isPublicTo(to) {
 }
 
 // Returns the cached Page doc (lean) or null. Never throws.
-export async function hydrateRemotePage(domain, slug, { fetcher = fetch } = {}) {
+export async function hydrateRemotePage(domain, slug, { fetcher = safeFetch } = {}) {
   if (!domain || !slug || isLocalDomain(domain)) return null;
 
   // SSRF guard — only hydrate from servers we already know are Kowloon.
@@ -50,17 +52,23 @@ export async function hydrateRemotePage(domain, slug, { fetcher = fetch } = {}) 
   }
   if (!data || !data.id || !isPublicTo(data.to)) return existing || null;
 
+  // SECURITY (2026-11-09): the shadow is upserted by id, so the remote may
+  // only describe a page on ITS OWN domain -- otherwise it could overwrite
+  // one of our local pages. Same rule as federation pulls.
+  const ownsId = (id) =>
+    typeof id === "string" &&
+    id.slice(id.lastIndexOf("@") + 1).toLowerCase() === String(domain).toLowerCase();
+  if (!ownsId(data.id) || (data.actorId && !ownsId(data.actorId))) return existing || null;
+
   const doc = {
     id: data.id,
     objectType: "Page",
     type: data.type === "Folder" ? "Folder" : "Page",
     title: data.title || slug,
     slug: data.slug || slug,
-    summary: data.summary || undefined,
-    // Body arrives already sanitized by the origin (a Kowloon server running the
-    // same schema). TODO(hardening): re-sanitize locally for defense-in-depth
-    // against a compromised remote before we surface hydrated pages on the web.
-    body: data.body || "",
+    // Never trust a peer's HTML: re-sanitize locally (see sanitizeRemote.js).
+    summary: data.summary ? sanitizeRemoteHtml(data.summary) : undefined,
+    body: sanitizeRemoteHtml(data.body || ""),
     source: data.source || undefined,
     actorId: data.actorId,
     actor: data.actor,

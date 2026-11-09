@@ -61,14 +61,20 @@ const MODELS = {
   User,
 };
 
+// SECURITY (2026-11-09): `body` (and `summary` for Post/Page) are rendered
+// HTML that the schema pre-save hooks generate from `source` through the
+// sanitizing markdown pipeline. They used to be patchable directly, and a
+// patch without `source` skipped that pipeline entirely -- stored XSS for
+// every viewer. They are now server-generated only; edit `source` instead.
+// (Bookmark.summary stays: it's the user's own plain-text description.)
 // Fields each objectType allows to be patched.
 // Anything not in the set is silently stripped before the $set.
 const ALLOWED_FIELDS = {
   User:     new Set(["profile", "prefs", "to", "canReply", "canReact", "email", "username"]),
-  Post:     new Set(["title", "summary", "source", "body", "type", "tags", "to", "canReply", "canReact", "image", "attachments", "href", "target", "location", "event"]),
-  Reply:    new Set(["source", "body", "tags", "attachments"]),
-  Page:     new Set(["title", "summary", "source", "body", "slug", "tags", "to", "canReply", "canReact", "image", "attachments", "href", "parentId", "order"]),
-  Bookmark: new Set(["title", "summary", "source", "body", "type", "tags", "to", "canReply", "canReact", "href", "target", "parentFolder", "image"]),
+  Post:     new Set(["title", "source", "type", "tags", "to", "canReply", "canReact", "image", "attachments", "href", "target", "location", "event"]),
+  Reply:    new Set(["source", "tags", "attachments"]),
+  Page:     new Set(["title", "source", "slug", "tags", "to", "canReply", "canReact", "image", "attachments", "href", "parentId", "order"]),
+  Bookmark: new Set(["title", "summary", "source", "type", "tags", "to", "canReply", "canReact", "href", "target", "parentFolder", "image"]),
   Circle:   new Set(["name", "summary", "icon", "to", "canReply", "canReact"]),
   Group:    new Set(["name", "summary", "icon", "image", "to", "canReply", "canReact", "rsvpPolicy", "location"]),
   React:    new Set(["emoji", "name"]),

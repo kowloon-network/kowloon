@@ -24,6 +24,12 @@ import notifyMentions from "#methods/mentions/notify.js";
 import writeFeedItems from "#methods/feed/writeFeedItems.js";
 import sanitizeHtml from "#methods/utils/sanitize.js";
 import resolveAttachments from "#methods/files/resolveAttachment.js";
+import isServerAdmin from "#methods/auth/isServerAdmin.js";
+import buildActorEmbed, {
+  isInboundFederated,
+  domainOfId,
+  signerDomain,
+} from "../utils/buildActorEmbed.js";
 
 // Strip dangerous HTML tags from Markdown source while preserving:
 //   1. Markdown syntax — sanitize-html encodes stray > chars to &gt;, which
@@ -195,6 +201,67 @@ export default async function Create(activity) {
     const type = activity.objectType;
     const Model = MODELS[type];
 
+    // SECURITY: per-origin objectType allowlist. `_federation` is only set by
+    // routes/inbox/post.js after signature verification (the outbox strips
+    // it from client bodies), so it reliably marks an inbound federated
+    // activity.
+    const inbound = isInboundFederated(activity);
+    // Reply and React have their own self-contained handlers that do the
+    // parent visibility / canReply / canReact / block checks. Creating them
+    // through the generic path skipped all of that.
+    if (type === "Reply" || type === "React") {
+      return { activity, error: `Create: ${type} must be sent as a ${type} activity` };
+    }
+    if (type === "User") {
+      // Accounts are never created from federated traffic; the local outbox
+      // path is admin-gated in routes/outbox/post.js, which also forces the
+      // activity actor to the server actor.
+      const { actorId: serverActorId, domain: serverDomain } = getServerSettings();
+      const isServerActor =
+        (serverActorId && activity.actorId === serverActorId) ||
+        (serverDomain && activity.actorId === `@${serverDomain}`);
+      if (inbound || !isServerActor) {
+        return { activity, error: "Create: User objects can only be created by a server admin" };
+      }
+    }
+    if (type === "Page") {
+      // Pages are admin-authored site content.
+      if (inbound || !(await isServerAdmin(activity.actorId))) {
+        return { activity, error: "Create: only a server admin can create Pages" };
+      }
+    }
+    if (inbound && type === "Bookmark") {
+      // Bookmarks are personal and never federate.
+      return { activity, error: "Create: Bookmarks are not accepted over federation" };
+    }
+
+    // SECURITY: strip server-derived fields from client-supplied objects so a
+    // caller can't choose its own id, signature, counters, actor embed, etc.
+    // (pre-save hooks fill id/url/server/signature only when they're absent).
+    // Inbound federated objects keep their remote id (validated below against
+    // the author's domain) so they stay findable across servers.
+    if (type !== "User" && activity.object && typeof activity.object === "object") {
+      const SERVER_DERIVED = [
+        "_id", "__v", "signature", "actor", "targetActor", "createdAt",
+        "updatedAt", "deletedAt", "deletedBy", "replyCount", "reactCount",
+        "reactPreview", "reactSummary", "shareCount", "memberCount",
+        "wordCount", "charCount", "lastFetchedAt", "iconGenerated",
+      ];
+      // Remote objects legitimately carry their origin's id/url/server.
+      if (!inbound) SERVER_DERIVED.push("id", "url", "server", "originDomain", "inbox", "outbox");
+      // Group system circles are minted by Group's pre-save; client-supplied
+      // circle ids could point a new group at someone else's circles.
+      if (type === "Group" && !inbound) SERVER_DERIVED.push("circles");
+      for (const k of SERVER_DERIVED) delete activity.object[k];
+      if (type === "Circle" && !inbound) {
+        // System circles are created by the server, never via Create.
+        activity.object.type = "Circle";
+        if (Array.isArray(activity.object.members)) {
+          activity.object.memberCount = activity.object.members.length;
+        }
+      }
+    }
+
     // ---- Special handling for Create → User --------------------------------
     if (type === "User") {
       // SECURITY (2026-10-28): this used to be `{ ...activity.object }` fed
@@ -275,39 +342,37 @@ export default async function Create(activity) {
 
       return { activity, created };
     } else {
-      // For everything but User, ensure actorId is set on the object
-      if (!activity.object.actorId) {
+      // SECURITY: authorship is decided server-side. Previously object.actorId
+      // was only filled when missing and activity.actor was trusted verbatim,
+      // so a local user could create a Post/Circle/... whose actorId named
+      // someone else -- and Post's pre-save hook then SIGNED it with that
+      // other user's key. Local (outbox) activities: always force
+      // object.actorId to the authenticated activity.actorId. Inbound
+      // federated activities: activity.actorId was verified against the HTTP
+      // signature by routes/inbox/post.js, so a differing object.actorId is
+      // only accepted when it lives on the signer's own domain.
+      if (inbound) {
+        const objActor = activity.object.actorId;
+        if (!objActor) {
+          activity.object.actorId = activity.actorId;
+        } else if (
+          objActor !== activity.actorId &&
+          domainOfId(objActor) !== signerDomain(activity)
+        ) {
+          return { activity, error: "Create: object.actorId does not belong to the signing server" };
+        }
+        // Inbound object ids must be minted by the author's own server, so a
+        // remote peer can't plant (or collide with) an id in another domain.
+        const objId = activity.object.id || activity.objectId;
+        if (objId && domainOfId(objId) !== domainOfId(activity.object.actorId)) {
+          return { activity, error: "Create: object id domain does not match its author" };
+        }
+      } else {
         activity.object.actorId = activity.actorId;
       }
 
-      // Resolve actor profile: use what the client sent, fall back to DB lookup
-      const clientActor = activity.actor && activity.actor.id ? activity.actor : null;
-      if (clientActor) {
-        activity.object.actor = clientActor;
-      } else if (activity.actorId) {
-        const { actorId: serverActorId, domain } = getServerSettings();
-        if (activity.actorId === serverActorId) {
-          activity.object.actor = getServerActor();
-        } else {
-          const actorDoc = await User.findOne({ id: activity.actorId })
-            .select("id username profile url inbox outbox server actorId")
-            .lean();
-          if (actorDoc) {
-            activity.object.actor = {
-              id: actorDoc.id,
-              type: actorDoc.type ?? 'Person',
-              name: actorDoc.profile?.name ?? actorDoc.username,
-              icon: actorDoc.profile?.icon ?? null,
-              url: actorDoc.url ?? `https://${domain}/users/${actorDoc.id}`,
-              inbox: actorDoc.inbox,
-              outbox: actorDoc.outbox,
-              server: actorDoc.server ?? `@${domain}`,
-            };
-          } else {
-            activity.object.actor = {};
-          }
-        }
-      }
+      // Actor embed built server-side for local activities (see helper).
+      activity.object.actor = await buildActorEmbed(activity);
     }
 
     // ---- Generic path for other object types -------------------------------
@@ -458,7 +523,11 @@ export default async function Create(activity) {
 
     // Preserve original ID for federated objects so they're findable by remote ID across servers.
     // The pre-save hook uses `this.id = this.id || ...` so setting it here is safe.
-    if (activity.federated && activity.objectId && !activity.object.id) {
+    // SECURITY: keyed on `inbound` (signature-verified), not `federated` --
+    // methods/activities/create.js sets `federated` on local outgoing
+    // activities too, which let an outbox caller pick its own object id via
+    // activity.objectId.
+    if (inbound && activity.objectId && !activity.object.id) {
       activity.object.id = activity.objectId;
     }
 

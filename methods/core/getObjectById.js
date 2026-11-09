@@ -3,6 +3,7 @@
 import parseKowloonId from "#methods/parse/kowloonId.js";
 import getSettings from "#methods/settings/get.js";
 import { getServerActor } from "#methods/settings/schemaHelpers.js";
+import { safeFetch } from "#methods/utils/safeUrl.js";
 
 // ---------- Errors ----------
 export class NotFound extends Error {
@@ -41,19 +42,12 @@ async function getDefaultModels() {
 }
 
 // ---------- Utils ----------
+// SECURITY: ids can be remote URLs/handles supplied by users or peers, so
+// remote fetches go through the shared SSRF guard (every redirect hop is
+// re-checked; internal/private hosts refused). The caller's catch already
+// treats a thrown fetch as an upstream failure.
 async function defaultFetch(url, { headers, timeoutMs = 8000 } = {}) {
-  const ctrl = new AbortController();
-  const t = setTimeout(() => ctrl.abort(), timeoutMs);
-  try {
-    return await fetch(url, {
-      method: "GET",
-      headers,
-      redirect: "follow",
-      signal: ctrl.signal,
-    });
-  } finally {
-    clearTimeout(t);
-  }
+  return await safeFetch(url, { method: "GET", headers, timeout: timeoutMs });
 }
 
 const eqLower = (a, b) =>

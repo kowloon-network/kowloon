@@ -14,6 +14,14 @@ import toMember from "#methods/parse/toMember.js";
 import kowloonId from "#methods/parse/kowloonId.js";
 import shouldFederate from "#methods/federation/shouldFederate.js";
 
+// Look up the Activity that already owns this activity's idempotency key.
+function findIdempotencyMatch(a) {
+  const or = [];
+  if (typeof a.remoteId === "string") or.push({ remoteId: a.remoteId });
+  if (typeof a.dedupeKey === "string") or.push({ actorId: a.actorId, dedupeKey: a.dedupeKey });
+  return or.length ? Activity.findOne({ $or: or }).lean() : null;
+}
+
 export default async function createActivity(input) {
   try {
     // Shallow clone to avoid mutating caller payload
@@ -38,8 +46,12 @@ export default async function createActivity(input) {
       }
     }
     // 2) Optional local idempotency via a caller-provided dedupeKey.
+    // Scoped per actor (matches the unique {actorId, dedupeKey} index) so one
+    // actor's key can never collide with -- or return -- another actor's
+    // activity.
     if (activity.dedupeKey && typeof activity.dedupeKey === "string") {
       const existing = await Activity.findOne({
+        actorId: activity.actorId,
         dedupeKey: activity.dedupeKey,
       }).lean();
       if (existing) {
@@ -109,7 +121,22 @@ export default async function createActivity(input) {
     // (e.g., { domain, keyId, remoteUser } added by /inbox route)
     const { _federation, ...persistable } = toSave;
 
-    const createdActivity = await Activity.create(persistable);
+    let createdActivity;
+    try {
+      createdActivity = await Activity.create(persistable);
+    } catch (err) {
+      // The check-then-insert above races: two concurrent deliveries of the
+      // same remoteId / dedupeKey both pass the findOne. The unique indexes
+      // reject the loser with E11000 -- treat that as the idempotent
+      // duplicate it is and return the winner instead of a 500.
+      if (err?.code === 11000) {
+        const existing = await findIdempotencyMatch(persistable);
+        if (existing) {
+          return { activity: existing, result, duplicated: true, federate: false };
+        }
+      }
+      throw err;
+    }
 
     // Return both the saved Activity and the verb's payload
     const federation = result?.federation;

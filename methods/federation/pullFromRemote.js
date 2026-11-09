@@ -20,6 +20,17 @@ import logger from "#methods/utils/logger.js";
 import { getServerSettings } from "#methods/settings/schemaHelpers.js";
 import { fileIdFromValue } from "#methods/files/fileRef.js";
 import { hydrateRemoteFiles } from "#methods/files/hydrateRemoteFile.js";
+import { safeFetch } from "#methods/utils/safeUrl.js";
+import signHttpRequest from "#methods/federation/signHttpRequest.js";
+import { sanitizeRemoteObject } from "#methods/utils/sanitizeRemote.js";
+
+// Fields a remote FeedItem may set on our cached copy (mirrors what
+// methods/feed/writeFeedItems.js writes for local items).
+const FEED_ITEM_FIELDS = [
+  "id", "url", "server", "actorId", "objectType", "type", "inReplyTo",
+  "threadRoot", "group", "object", "to", "canReply", "canReact",
+  "publishedAt", "updatedAt", "etag", "tombstoned",
+];
 
 function dedupeHash(feedItemId, to) {
   return crypto.createHash("sha256").update(`${feedItemId}:${to}`).digest("hex");
@@ -89,13 +100,18 @@ export default async function pullFromRemote({
       serverOnlyPull,
     });
 
-    const response = await fetch(url, {
+    // Signed: the remote's batch-pull endpoint returns circle-addressed
+    // content and requires a valid HTTP signature from the requesting server
+    // (routes/outbox/collection.js).
+    const headers = {
+      Accept: "application/activity+json",
+      "User-Agent": `Kowloon/${ourDomain}`,
+    };
+    await signHttpRequest({ method: "GET", url, headers });
+    const response = await safeFetch(url, {
       method: "GET",
-      headers: {
-        Accept: "application/activity+json",
-        "User-Agent": `Kowloon/${ourDomain}`,
-      },
-      signal: AbortSignal.timeout(30000),
+      headers,
+      timeout: 30000,
     });
 
     if (!response.ok) {
@@ -114,9 +130,37 @@ export default async function pullFromRemote({
     }
 
     const data = await response.json();
-    const items = data.items || data.orderedItems || [];
-    const recipients = data.recipients || []; // only used for user follows
-    const tombstones = Array.isArray(data.tombstones) ? data.tombstones : [];
+
+    // SECURITY (2026-11-09): everything below is written into OUR database,
+    // so a peer may only speak for objects on ITS OWN domain. Previously any
+    // followed server could return our own post ids in `tombstones` (deleting
+    // local posts) or in `items` (overwriting a local post's cached copy --
+    // e.g. flipping a private post to public, or swapping its body). Also
+    // rejects non-string ids, which would otherwise reach Mongo as query
+    // operators ({"$ne": null}).
+    const remoteHost = String(remoteDomain).toLowerCase();
+    const onRemote = (id) =>
+      typeof id === "string" &&
+      id.includes("@") &&
+      id.slice(id.lastIndexOf("@") + 1).toLowerCase() === remoteHost;
+    const rawItems = Array.isArray(data.items)
+      ? data.items
+      : Array.isArray(data.orderedItems)
+        ? data.orderedItems
+        : [];
+    const items = rawItems.filter(
+      (it) => it && typeof it === "object" && onRemote(it.id) && onRemote(it.actorId)
+    );
+    if (items.length !== rawItems.length) {
+      logger.warn("pullFromRemote: dropped items not owned by remote", {
+        remoteDomain,
+        dropped: rawItems.length - items.length,
+      });
+    }
+    const recipients = (Array.isArray(data.recipients) ? data.recipients : []).filter(
+      (r) => r && onRemote(r.itemId) && Array.isArray(r.to)
+    ); // only used for user follows
+    const tombstones = (Array.isArray(data.tombstones) ? data.tombstones : []).filter(onRemote);
     const nextCursor = data.next || null;
 
     logger.info("pullFromRemote: Retrieved", {
@@ -160,7 +204,21 @@ export default async function pullFromRemote({
         continue;
       }
       try {
-        const { _id, __v, ...itemFields } = item;
+        // Allowlisted fields only -- never let a peer set arbitrary keys
+        // (FeedItems is strict:false). origin/originDomain are forced, and
+        // HTML-bearing object fields are sanitized (see sanitizeRemote.js).
+        const itemFields = {};
+        for (const k of FEED_ITEM_FIELDS) {
+          if (item[k] !== undefined) itemFields[k] = item[k];
+        }
+        itemFields.origin = "remote";
+        itemFields.originDomain = remoteHost;
+        if (itemFields.object && typeof itemFields.object === "object") {
+          itemFields.object = sanitizeRemoteObject(itemFields.object);
+          // The embedded object must describe the same item and author.
+          if (itemFields.object.id !== undefined) itemFields.object.id = item.id;
+          if (itemFields.object.actorId !== undefined) itemFields.object.actorId = item.actorId;
+        }
         // Remote items carry publishedAt as an ISO string; coerce to a real Date
         // so it doesn't sort below Date-typed local posts (see schema/FeedItems.js).
         // The typed schema path also casts this, but be explicit at the write site.

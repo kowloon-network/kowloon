@@ -10,6 +10,7 @@ import route from "../utils/route.js";
 import { Circle } from "#schema";
 import { activityStreamsCollection } from "../utils/oc.js";
 import { getSetting } from "#methods/settings/cache.js";
+import isServerAdmin from "#methods/auth/isServerAdmin.js";
 
 const router = express.Router({ mergeParams: true });
 
@@ -87,7 +88,7 @@ router.get(
       id: circleId,
       deletedAt: null,
     })
-      .select("id actorId members memberCount to")
+      .select("id type actorId members memberCount to")
       .lean();
 
     if (!circle) {
@@ -103,18 +104,34 @@ router.get(
     const isOwner = user?.id && circle.actorId === user?.id;
     const isMember = user?.id && circle.members?.some((m) => m.id === user?.id);
 
-    if (!isPublic) {
+    // SECURITY: the member list used to be readable by any MEMBER of a
+    // private circle (so everyone you follow could list your Following
+    // circle, blocked users could read your Blocked list, ...). Now:
+    //   - System circles (user + group bookkeeping circles): owner or server
+    //     admin only, 404 otherwise. Group member lists are served by
+    //     GET /groups/:id/members under the group's own visibility.
+    //   - User circles: owner/admin, or anyone allowed when the circle is
+    //     @public, or local users when it's addressed to this server.
+    const viewerIsAdmin = user?.id ? await isServerAdmin(user.id) : false;
+    if (circle.type === "System" && !isOwner && !viewerIsAdmin) {
+      setStatus(404);
+      set("error", "Circle not found");
+      return;
+    }
+    if (!isPublic && !isOwner && !viewerIsAdmin) {
       if (!user?.id) {
         setStatus(401);
         set("error", "Authentication required");
         return;
       }
-      if (!isOwner && !isMember && !isServerVisible) {
+      const isLocalViewer = String(user.id).toLowerCase().endsWith(`@${domain.toLowerCase()}`);
+      if (!(isServerVisible && isLocalViewer)) {
         setStatus(403);
         set("error", "Access denied");
         return;
       }
     }
+    void isMember; // membership alone no longer grants the member list
 
     const page = Math.max(1, parseInt(query.page, 10) || 1);
     const limit = Math.min(Math.max(1, parseInt(query.limit, 10) || 20), 100);

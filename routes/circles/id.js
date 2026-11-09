@@ -49,6 +49,21 @@ export default route(async ({ req, params, user, set, setStatus }) => {
     }
   }
 
+  // SECURITY: System circles (a user's Following / All Following / Groups /
+  // Blocked / Muted, and a Group's Admins / Moderators / Members / Blocked /
+  // Pending -- owned by the group id) are internal bookkeeping. The isMember
+  // exception below let anyone IN one read all of it -- e.g. everyone you
+  // follow could list your whole Following circle, and blocked users could
+  // read your Blocked list. Owner or server admin only; 404 so existence
+  // isn't confirmed. (Group member lists are served by GET
+  // /groups/:id/members under the group's own visibility.)
+  const viewerIsAdmin = user?.id ? await isServerAdmin(user.id) : false;
+  if (circle.type === "System" && !isOwner && !viewerIsAdmin) {
+    setStatus(404);
+    set("error", "Circle not found");
+    return;
+  }
+
   if (!isPublic) {
     if (!user?.id) {
       setStatus(401);
@@ -64,5 +79,12 @@ export default route(async ({ req, params, user, set, setStatus }) => {
 
   // Expose isOwner and isMember to the client so the UI can gate actions
   const result = { ...circle, isOwner: !!isOwner, isMember: !!isMember };
+  // SECURITY: being a member of a private circle lets you see the circle,
+  // not who else is in it. The member list is only exposed to the owner /
+  // server admin, or when the circle itself is @public or addressed to this
+  // server (and the viewer is a local user, enforced above).
+  if (!isOwner && !viewerIsAdmin && !isPublic && !isServerVisible) {
+    delete result.members;
+  }
   set("item", result);
 });

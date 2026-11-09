@@ -115,7 +115,7 @@ const ObjectId = mongoose.Types.ObjectId;
 
 const PostSchema = new Schema(
   {
-    id: { type: String, key: true },
+    id: { type: String },
     // Local domain on create; the source domain when hydrated from a remote server.
     originDomain: { type: String, default: () => getServerSettings()?.domain },
     objectType: { type: String, default: "Post" },
@@ -179,6 +179,12 @@ PostSchema.index({
 });
 
 PostSchema.index({ type: 1, "attachments.kind": 1 });
+
+// `key: true` is not a Mongoose option -- `id` was never indexed, so every
+// findOne({ id }) was a collection scan. Partial (string-only) so any legacy
+// doc missing `id` can't block the unique build.
+PostSchema.index({ id: 1 }, { unique: true, partialFilterExpression: { id: { $type: "string" } } });
+PostSchema.index({ actorId: 1, createdAt: -1 }); // author post lists
 
 // Render source content to sanitized HTML.
 // Only text/markdown is accepted; anything else is treated as plain text.

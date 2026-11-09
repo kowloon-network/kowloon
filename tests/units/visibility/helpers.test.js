@@ -33,72 +33,72 @@ describe("Visibility Helpers", () => {
   };
 
   describe("canSeeObject", () => {
-    test("@public is visible to anyone (authenticated)", () => {
-      expect(canSeeObject({ to: "@public" }, ctxKwln)).toBe(true);
+    test("@public is visible to anyone (authenticated)", async () => {
+      expect(await canSeeObject({ to: "@public" }, ctxKwln)).toBe(true);
     });
 
-    test("@public is visible to anonymous users", () => {
-      expect(canSeeObject({ to: "@public" }, ctxAnonymous)).toBe(true);
-      expect(canSeeObject({ to: "@public" }, null)).toBe(true);
+    test("@public is visible to anonymous users", async () => {
+      expect(await canSeeObject({ to: "@public" }, ctxAnonymous)).toBe(true);
+      expect(await canSeeObject({ to: "@public" }, null)).toBe(true);
     });
 
-    test("domain-scoped content visible to domain members", () => {
-      expect(canSeeObject({ to: "@kwln.org" }, ctxKwln)).toBe(true);
+    test("domain-scoped content visible to domain members", async () => {
+      expect(await canSeeObject({ to: "@kwln.org" }, ctxKwln)).toBe(true);
     });
 
-    test("domain-scoped content NOT visible to other domains", () => {
-      expect(canSeeObject({ to: "@kwln.org" }, ctxOtherDomain)).toBe(false);
-      expect(canSeeObject({ to: "@kwln.social" }, ctxKwln)).toBe(false);
+    test("domain-scoped content NOT visible to other domains", async () => {
+      expect(await canSeeObject({ to: "@kwln.org" }, ctxOtherDomain)).toBe(false);
+      expect(await canSeeObject({ to: "@kwln.social" }, ctxKwln)).toBe(false);
     });
 
-    test("domain-scoped content NOT visible to anonymous", () => {
-      expect(canSeeObject({ to: "@kwln.org" }, ctxAnonymous)).toBe(false);
+    test("domain-scoped content NOT visible to anonymous", async () => {
+      expect(await canSeeObject({ to: "@kwln.org" }, ctxAnonymous)).toBe(false);
     });
 
-    test("circle-scoped content visible to circle members", () => {
-      expect(canSeeObject({ to: "circle:c1@kwln.org" }, ctxKwln)).toBe(true);
+    test("circle-scoped content visible to circle members", async () => {
+      expect(await canSeeObject({ to: "circle:c1@kwln.org" }, ctxKwln)).toBe(true);
     });
 
-    test("circle-scoped content NOT visible to non-members", () => {
-      expect(canSeeObject({ to: "circle:c1@kwln.org" }, ctxOtherDomain)).toBe(
+    test("circle-scoped content NOT visible to non-members", async () => {
+      expect(await canSeeObject({ to: "circle:c1@kwln.org" }, ctxOtherDomain)).toBe(
         false
       );
-      expect(canSeeObject({ to: "circle:other@kwln.org" }, ctxKwln)).toBe(
-        false
-      );
-    });
-
-    test("circle-scoped content NOT visible to anonymous", () => {
-      expect(canSeeObject({ to: "circle:c1@kwln.org" }, ctxAnonymous)).toBe(
+      expect(await canSeeObject({ to: "circle:other@kwln.org" }, ctxKwln)).toBe(
         false
       );
     });
 
-    test("group-scoped content visible to group members", () => {
-      expect(canSeeObject({ to: "group:g1@kwln.org" }, ctxKwln)).toBe(true);
-    });
-
-    test("group-scoped content NOT visible to non-members", () => {
-      expect(canSeeObject({ to: "group:g1@kwln.org" }, ctxOtherDomain)).toBe(
-        false
-      );
-      expect(canSeeObject({ to: "group:other@kwln.org" }, ctxKwln)).toBe(
+    test("circle-scoped content NOT visible to anonymous", async () => {
+      expect(await canSeeObject({ to: "circle:c1@kwln.org" }, ctxAnonymous)).toBe(
         false
       );
     });
 
-    test("group-scoped content NOT visible to anonymous", () => {
-      expect(canSeeObject({ to: "group:g1@kwln.org" }, ctxAnonymous)).toBe(
+    test("group-scoped content visible to group members", async () => {
+      expect(await canSeeObject({ to: "group:g1@kwln.org" }, ctxKwln)).toBe(true);
+    });
+
+    test("group-scoped content NOT visible to non-members", async () => {
+      expect(await canSeeObject({ to: "group:g1@kwln.org" }, ctxOtherDomain)).toBe(
+        false
+      );
+      expect(await canSeeObject({ to: "group:other@kwln.org" }, ctxKwln)).toBe(
         false
       );
     });
 
-    test("null object returns false", () => {
-      expect(canSeeObject(null, ctxKwln)).toBe(false);
+    test("group-scoped content NOT visible to anonymous", async () => {
+      expect(await canSeeObject({ to: "group:g1@kwln.org" }, ctxAnonymous)).toBe(
+        false
+      );
     });
 
-    test("object without 'to' field returns false", () => {
-      expect(canSeeObject({}, ctxKwln)).toBe(false);
+    test("null object returns false", async () => {
+      expect(await canSeeObject(null, ctxKwln)).toBe(false);
+    });
+
+    test("object without 'to' field returns false", async () => {
+      expect(await canSeeObject({}, ctxKwln)).toBe(false);
     });
   });
 

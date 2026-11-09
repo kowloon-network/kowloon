@@ -16,7 +16,7 @@ export const CAP_ENUM = ["public", "followers", "audience", "none"]; // who may 
 const FeedItemsSchema = new Schema(
   {
     // Canonical identifiers
-    id: { type: String, key: true }, // global canonical id (remote as-is; local minted)
+    id: { type: String }, // global canonical id (remote as-is; local minted)
     url: { type: String, default: undefined }, // canonical URL (locals minted below)
     server: { type: String, default: undefined }, // originating server
 

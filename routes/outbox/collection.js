@@ -13,6 +13,7 @@ import route from "../utils/route.js";
 import { Activity, Circle, FeedItems, Post } from "#schema";
 import { activityStreamsCollection } from "../utils/oc.js";
 import { getSetting } from "#methods/settings/cache.js";
+import verifyHttpSignature from "#methods/federation/verifyHttpSignature.js";
 
 // A bare-server from entry looks like "@kwln2.local" (one @ at position 0, no second @)
 // A user from entry looks like "@alice@kwln2.local" (two @s)
@@ -21,7 +22,7 @@ function isServerEntry(id) {
 }
 
 export default route(
-  async ({ req, query, set }) => {
+  async ({ req, query, set, setStatus }) => {
     const domain = getSetting("domain");
     const base = `https://${domain}/outbox`;
     const limit = Math.min(Math.max(1, parseInt(query.limit, 10) || 20), 100);
@@ -30,9 +31,44 @@ export default route(
     // Batch-pull S2S mode: ?from= AND ?to= both present
     // -------------------------------------------------------------------------
     if (query.from && query.to) {
-      const froms = Array.isArray(query.from) ? query.from : [query.from];
-      const tos = Array.isArray(query.to) ? query.to : [query.to];
-      const since = query.since ? new Date(query.since) : null;
+      // SECURITY (2026-11-09): this mode returns circle-addressed posts and
+      // reveals circle membership, so it must only ever answer a SERVER, and
+      // only about that server's own users. It used to be fully
+      // unauthenticated with caller-chosen `to` -- anyone could list a
+      // user's circle-only posts by naming the people in the circle.
+      //   - require a valid HTTP signature (pullFromRemote signs its GET)
+      //   - `to` is limited to accounts on the signer's domain
+      //   - `from` is limited to OUR accounts / our bare server entry
+      const sig = await verifyHttpSignature(req, {});
+      if (!sig.ok) {
+        setStatus(401);
+        set("error", sig.error || "Signature required");
+        return;
+      }
+      let signerDomain = null;
+      try { signerDomain = new URL(sig.keyId).hostname.toLowerCase(); } catch (_) {}
+      const ownDomain = String(domain || "").toLowerCase();
+      const domainOf = (id) => id.slice(id.lastIndexOf("@") + 1).toLowerCase();
+      const asStrings = (v) => (Array.isArray(v) ? v : [v]).filter((x) => typeof x === "string" && x.includes("@"));
+      if (!signerDomain || signerDomain === ownDomain) {
+        setStatus(403);
+        set("error", "Invalid signer");
+        return;
+      }
+      const froms = asStrings(query.from).filter((f) => domainOf(f) === ownDomain);
+      const tos = asStrings(query.to).filter((t) => domainOf(t) === signerDomain);
+      if (froms.length === 0 || tos.length === 0) {
+        set("@context", "https://www.w3.org/ns/activitystreams");
+        set("type", "OrderedCollection");
+        set("id", base);
+        set("totalItems", 0);
+        set("items", []);
+        set("recipients", []);
+        set("tombstones", []);
+        return;
+      }
+      const sinceRaw = typeof query.since === "string" ? new Date(query.since) : null;
+      const since = sinceRaw && !isNaN(sinceRaw) ? sinceRaw : null;
       const sinceFilter = since ? { publishedAt: { $gte: since } } : {};
 
       const serverFroms = froms.filter(isServerEntry);

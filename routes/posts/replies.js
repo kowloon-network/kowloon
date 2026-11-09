@@ -7,6 +7,7 @@
 // not keep per-server reply state — the parent host is the single source of
 // truth, so deletes/edits never need to fan out beyond it.
 
+import { sanitizeRemoteObject } from "#methods/utils/sanitizeRemote.js";
 import route from "../utils/route.js";
 import { Reply, Post } from "#schema";
 import { activityStreamsCollection } from "../utils/oc.js";
@@ -15,6 +16,7 @@ import kowloonId from "#methods/parse/kowloonId.js";
 import { excludeBlockedMuted } from "#methods/visibility/context.js";
 import { enrichAttachments } from "#methods/files/enrichAttachments.js";
 import { authorizeInteraction } from "#methods/feed/visibility.js";
+import { safeFetch } from "#methods/utils/safeUrl.js";
 
 const DEFAULT_LIMIT = 20;
 const MAX_LIMIT = 100;
@@ -94,13 +96,16 @@ async function proxyToRemote(ctx, remoteDomain, postId) {
   const localDomain = getSetting("domain") || "unknown";
 
   try {
-    const response = await fetch(url, {
+    // SECURITY: the domain here is user-supplied (a handle or id), so route the
+    // request through the shared SSRF guard (blocks internal hosts, re-checks
+    // every redirect hop).
+    const response = await safeFetch(url, {
       method: "GET",
       headers: {
         Accept: "application/activity+json",
         "User-Agent": `Kowloon/${localDomain}`,
       },
-      signal: AbortSignal.timeout(15000),
+      timeout: 15000,
     });
 
     if (!response.ok) {
@@ -110,7 +115,14 @@ async function proxyToRemote(ctx, remoteDomain, postId) {
     }
 
     const body = await response.json();
-    for (const [key, value] of Object.entries(body)) {
+    // SECURITY (2026-11-09): this is a peer's HTML relayed to our users'
+    // browsers -- sanitize every reply's HTML fields before passing it on.
+    if (body && typeof body === "object") {
+      for (const k of ["orderedItems", "items"]) {
+        if (Array.isArray(body[k])) body[k] = body[k].map(sanitizeRemoteObject);
+      }
+    }
+    for (const [key, value] of Object.entries(body || {})) {
       set(key, value);
     }
   } catch (err) {

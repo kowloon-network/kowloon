@@ -25,6 +25,48 @@ async function isInFanOutAudience(feedItemId, viewerId) {
 }
 
 /**
+ * Is a group's content visible to this viewer? Mirrors the access rule in
+ * routes/groups/posts.js: public group -> everyone; domain-scoped group
+ * (@<domain>, or @server meaning the group's own domain) -> viewers on that
+ * domain; otherwise -> members of the group's members Circle (members live in
+ * Circle `group.circles.members`; Group has no top-level `members`).
+ * Returns false when the Group isn't known locally (e.g. an uncached remote
+ * group) so callers fall back to the FeedFanOut grant.
+ */
+export async function isGroupVisibleTo(groupId, viewerId) {
+  if (!groupId) return false;
+  const group = await Group.findOne({ id: groupId, deletedAt: null })
+    .select("id to circles.members")
+    .lean();
+  if (!group) return false;
+
+  const gTo = (group.to || "").toLowerCase().trim();
+  if (gTo === "@public" || gTo === "public") return true;
+  if (!viewerId) return false;
+
+  const viewerDomain = domainOf(viewerId)?.toLowerCase();
+  const groupDomain = kowloonId(group.id)?.domain?.toLowerCase();
+  // Domain scope: "@server"/"server" = the group's own domain; "@<domain>"
+  // (exactly one "@") = that domain.
+  const scopeDomain =
+    gTo === "@server" || gTo === "server"
+      ? groupDomain
+      : gTo.startsWith("@") && gTo.indexOf("@", 1) === -1
+        ? gTo.slice(1)
+        : null;
+  if (scopeDomain && viewerDomain === scopeDomain) return true;
+
+  if (group.circles?.members) {
+    const isMember = await Circle.exists({
+      id: group.circles.members,
+      "members.id": viewerId,
+    });
+    if (isMember) return true;
+  }
+  return false;
+}
+
+/**
  * Check if viewer can see a FeedItems item
  * @param {Object} feedCacheItem - FeedItems document
  * @param {string|null} viewerId - Viewer's ID (null = anonymous)
@@ -56,8 +98,16 @@ export async function canView(feedCacheItem, viewerId, context = {}) {
 
   // "audience" → depends on origin
   if (to === "audience") {
+    if (viewerId && feedCacheItem.actorId === viewerId) return true; // owner always sees own posts
+    // Group-addressed items: writeFeedItems coarsens group:<id> to "audience",
+    // but enqueueFanOut writes public/server groups as ONE @public/@server row
+    // (never a per-viewer row), so the FanOut lookup below denied every
+    // non-author member. Evaluate the group's own policy + live membership
+    // instead (also lets members who joined after the post see it).
+    if (feedCacheItem.group && (await isGroupVisibleTo(feedCacheItem.group, viewerId))) {
+      return true;
+    }
     if (!viewerId) return false;
-    if (feedCacheItem.actorId === viewerId) return true; // owner always sees own posts
     // FeedFanOut is authoritative for both local and remote audience posts
     // (remote group posts create per-user FeedFanOut records via enqueueFanOut)
     return isInFanOutAudience(feedCacheItem.id, viewerId);

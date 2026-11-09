@@ -9,7 +9,7 @@ const { Schema } = mongoose;
 
 const GroupSchema = new Schema(
   {
-    id: { type: String, key: true, unique: true }, // reject duplicate Kowloon ids (#30)
+    id: { type: String, unique: true }, // reject duplicate Kowloon ids (#30)
     // Local domain on create; the source domain when hydrated from a remote server.
     originDomain: { type: String, default: () => getServerSettings()?.domain },
     objectType: { type: String, default: "Group" },

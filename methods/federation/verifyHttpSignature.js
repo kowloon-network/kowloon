@@ -1,6 +1,7 @@
 // /methods/federation/verifyHttpSignature.js
 import crypto from "crypto";
 import logger from "#methods/utils/logger.js";
+import { safeFetch } from "#methods/utils/safeUrl.js";
 import { SignatureNonce } from "#schema";
 
 // In-memory public key cache: keyId → { pem, fetchedAt }
@@ -44,7 +45,10 @@ async function fetchPublicKeyFromKeyId(keyId) {
 
   // Commonly a URL (actor or server key). Fetch it, parse JSON, extract PEM/JWK.
   try {
-    const res = await fetch(keyId, { method: "GET", signal: AbortSignal.timeout(5000) });
+    // SECURITY: keyId is attacker-chosen (it comes from the Signature
+    // header of an unauthenticated request), so fetch it through the shared
+    // SSRF guard -- checks every redirect hop and blocks internal hosts.
+    const res = await safeFetch(keyId, { method: "GET", timeout: 5000 });
     if (!res.ok) throw new Error(`key fetch ${res.status}`);
     const json = await res.json();
     // Unwrap Kowloon API envelope { item: { ... } }

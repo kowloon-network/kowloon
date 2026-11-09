@@ -1,5 +1,6 @@
 // /methods/visibility/helpers.js
 import { domainOf } from "./context.js";
+import { getServerSettings } from "#methods/settings/schemaHelpers.js";
 
 const isCircleId = (s) => typeof s === "string" && s.startsWith("circle:");
 const isGroupId = (s) => typeof s === "string" && s.startsWith("group:");
@@ -35,7 +36,54 @@ export function sanitizeAudience(obj, ctx) {
   return out;
 }
 
-export async function canSeeObject(obj, ctx) {
+// SECURITY: Replies and Reacts always have an empty `to` (visibility is
+// inherited from the parent, see server CLAUDE.md), and the empty-`to` rule
+// below made them visible to any authenticated viewer -- so a reply on a
+// circle-only post could be read by anyone via /lookup or /resolve. Resolve
+// them against their parent (target) instead.
+const INTERACTION_TYPES = new Set(["Reply", "React"]);
+const PARENT_LOOKUP_MAX_DEPTH = 3;
+
+function interactionTypeOf(obj) {
+  const t = obj?.objectType || obj?.type;
+  if (INTERACTION_TYPES.has(t)) return t;
+  if (typeof obj?.id === "string") {
+    if (obj.id.startsWith("reply:")) return "Reply";
+    if (obj.id.startsWith("react:")) return "React";
+  }
+  return null;
+}
+
+async function canSeeParent(obj, ctx, depth) {
+  // Reply.target is the ROOT object of the thread; React.target is whatever
+  // was reacted to (may itself be a Reply, handled by recursion).
+  const targetId = obj.target;
+  if (!targetId || typeof targetId !== "string" || depth > PARENT_LOOKUP_MAX_DEPTH) return false;
+
+  const Models = await import("#schema");
+  for (const name of ["Post", "Page", "Reply", "Circle", "Group", "Bookmark", "User"]) {
+    const Model = Models[name];
+    if (!Model) continue;
+    const parent = await Model.findOne({ id: targetId }).lean();
+    if (!parent) continue;
+    if (parent.deletedAt) return false;
+    if (!parent.objectType) parent.objectType = name;
+    return canSeeObject(parent, ctx, depth + 1);
+  }
+
+  // Parent isn't a local object (e.g. a local reply on a remote post): use
+  // the FeedItems cache + the same canView() GET /posts/:id uses.
+  const { FeedItems } = Models;
+  const item = FeedItems
+    ? await FeedItems.findOne({ id: targetId, deletedAt: null, tombstoned: { $ne: true } }).lean()
+    : null;
+  if (!item) return false;
+  const { canView, buildFollowerMap } = await import("#methods/feed/visibility.js");
+  const followerMap = await buildFollowerMap([item.actorId]);
+  return canView(item, ctx?.viewerId || null, { followerMap });
+}
+
+export async function canSeeObject(obj, ctx, _depth = 0) {
   if (!obj) return false;
 
   // User profiles are always findable when active. Personal-info fields
@@ -54,11 +102,23 @@ export async function canSeeObject(obj, ctx) {
     if (obj.id && obj.id === ctx.viewerId) return true; // User objects use id as the actor handle
   }
 
+  if (interactionTypeOf(obj)) {
+    return canSeeParent(obj, ctx, _depth);
+  }
+
   const to = obj.to;
 
-  // Empty/missing `to` defaults to server-wide visibility
+  // Empty/missing `to` defaults to server-wide visibility -- i.e. THIS
+  // server's users. (SECURITY: previously any viewer with a domain, which
+  // includes a remote actor authenticated by HTTP signature on /resolve.)
   if (!to || to === "") {
-    return !!(ctx?.isAuthenticated && ctx.viewerDomain);
+    const { domain } = getServerSettings();
+    return !!(
+      ctx?.isAuthenticated &&
+      ctx.viewerDomain &&
+      domain &&
+      String(ctx.viewerDomain).toLowerCase() === String(domain).toLowerCase()
+    );
   }
 
   // Public objects are always visible

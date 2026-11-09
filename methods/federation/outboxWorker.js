@@ -14,6 +14,11 @@ const CONFIG = {
   hostConcurrency: 2, // Max concurrent deliveries per host
   globalConcurrency: 10, // Max total concurrent deliveries
   responseBodyMaxBytes: 1024, // Max response body to store
+  requestTimeoutMs: 10000, // Per-delivery HTTP timeout
+  // Claim lease. A delivery is claimed (pending -> delivering) right before
+  // its send; if the worker dies before writing the result, the lease expires
+  // and the delivery is re-queued. Must comfortably exceed requestTimeoutMs.
+  leaseMs: 60000,
 };
 
 /**
@@ -70,7 +75,9 @@ async function sendToInbox(delivery, activity) {
       method: "POST",
       headers,
       body,
-      timeout: 10000, // 10s timeout
+      // `timeout` is not a Node fetch option (it was silently ignored, so a
+      // hung peer stalled the worker indefinitely). AbortSignal.timeout is.
+      signal: AbortSignal.timeout(CONFIG.requestTimeoutMs),
     });
 
     const latencyMs = Date.now() - t0;
@@ -112,10 +119,8 @@ async function sendToInbox(delivery, activity) {
  * @returns {Promise<Object>} Updated delivery
  */
 async function processDelivery(job, delivery) {
-  // Mark as delivering
-  delivery.status = "delivering";
-  delivery.attempts += 1;
-  delivery.lastAttemptAt = new Date();
+  // status/attempts/lastAttemptAt/leaseUntil were already set atomically by
+  // claimDelivery(); this only computes the outcome.
 
   // Send to inbox
   const result = await sendToInbox(delivery, job.activity);
@@ -221,6 +226,100 @@ async function processDelivery(job, delivery) {
   return delivery;
 }
 
+// Due = pending and (no nextAttemptAt or nextAttemptAt <= now).
+function dueDeliveryMatch(now) {
+  return {
+    status: "pending",
+    $or: [{ nextAttemptAt: null }, { nextAttemptAt: { $lte: now } }],
+  };
+}
+
+/**
+ * Re-queue deliveries whose claim lease expired (worker crashed / was killed
+ * mid-send). leaseUntil null/missing on a "delivering" row is also treated as
+ * expired so nothing can get stuck in "delivering" forever.
+ */
+async function requeueExpiredLeases(now) {
+  const expired = { $not: { $gte: now } };
+  await Outbox.updateMany(
+    { deliveries: { $elemMatch: { status: "delivering", leaseUntil: expired } } },
+    {
+      $set: {
+        "deliveries.$[d].status": "pending",
+        "deliveries.$[d].leaseUntil": null,
+      },
+    },
+    { arrayFilters: [{ "d.status": "delivering", "d.leaseUntil": expired }] }
+  );
+}
+
+/**
+ * Atomically claim one due delivery (pending -> delivering + lease). Returns
+ * the claimed delivery (plain object, attempts already incremented) or null
+ * if another worker/tick got it first. This is what prevents two workers (or
+ * two overlapping ticks) from sending the same delivery twice.
+ */
+async function claimDelivery(jobId, deliveryId) {
+  const now = new Date();
+  const claimed = await Outbox.findOneAndUpdate(
+    {
+      _id: jobId,
+      deliveries: { $elemMatch: { _id: deliveryId, ...dueDeliveryMatch(now) } },
+    },
+    {
+      $set: {
+        "deliveries.$.status": "delivering",
+        "deliveries.$.lastAttemptAt": now,
+        "deliveries.$.leaseUntil": new Date(now.getTime() + CONFIG.leaseMs),
+      },
+      $inc: { "deliveries.$.attempts": 1 },
+    },
+    { new: true }
+  ).lean();
+  if (!claimed) return null;
+  const delivery = claimed.deliveries.find((d) => String(d._id) === String(deliveryId));
+  return delivery ? { job: claimed, delivery } : null;
+}
+
+const RESULT_FIELDS = [
+  "status",
+  "responseStatus",
+  "responseHeaders",
+  "responseBody",
+  "remoteActivityId",
+  "error",
+  "nextAttemptAt",
+  "metrics",
+];
+
+/**
+ * Write a delivery's outcome back atomically (only if we still hold the claim),
+ * then re-save the job so the pre-save hook recomputes status/counts.
+ */
+async function writeDeliveryResult(jobId, delivery) {
+  // An outcome processDelivery() doesn't classify (e.g. a 3xx) would leave the
+  // row "delivering" -- back it off like a transient error rather than
+  // letting the expired-lease sweep re-send it every tick.
+  if (delivery.status === "delivering") {
+    const exhausted = delivery.attempts >= CONFIG.maxAttempts;
+    delivery.status = exhausted ? "failed" : "pending";
+    delivery.nextAttemptAt = exhausted ? null : calculateNextAttempt(delivery.attempts);
+  }
+  const $set = { "deliveries.$.leaseUntil": null };
+  for (const f of RESULT_FIELDS) {
+    if (delivery[f] !== undefined) $set[`deliveries.$.${f}`] = delivery[f];
+  }
+  await Outbox.updateOne(
+    { _id: jobId, deliveries: { $elemMatch: { _id: delivery._id, status: "delivering" } } },
+    { $set }
+  );
+  const jobDoc = await Outbox.findById(jobId);
+  if (jobDoc) {
+    jobDoc.lastAttemptedAt = new Date();
+    await jobDoc.save(); // pre-save hook recalculates job status + counts
+  }
+}
+
 /**
  * Find and process due deliveries
  * @returns {Promise<number>} Number of deliveries processed
@@ -228,12 +327,18 @@ async function processDelivery(job, delivery) {
 export async function processOutboxBatch() {
   const now = new Date();
 
-  // Find jobs with pending/failed deliveries that are due
+  await requeueExpiredLeases(now);
+
+  // Only pick jobs that actually have a DUE delivery. Previously this matched
+  // any job with counts.pending > 0, so the first batchSize jobs whose pending
+  // deliveries were all backed off (nextAttemptAt in the future) filled every
+  // batch and starved due work behind them. Oldest-attempted first.
   const jobs = await Outbox.find({
-    status: { $in: ["pending", "delivering", "partial"] },
-    "counts.pending": { $gt: 0 },
+    deliveries: { $elemMatch: dueDeliveryMatch(now) },
   })
+    .sort({ lastAttemptedAt: 1 })
     .limit(CONFIG.batchSize)
+    .select("_id id deliveries._id deliveries.status deliveries.nextAttemptAt")
     .lean();
 
   if (jobs.length === 0) {
@@ -253,33 +358,19 @@ export async function processOutboxBatch() {
     if (dueDeliveries.length === 0) continue;
 
     // Process each delivery (TODO: respect host concurrency limits)
-    for (const delivery of dueDeliveries) {
+    for (const candidate of dueDeliveries) {
       try {
-        // Find the actual job document (not lean)
-        const jobDoc = await Outbox.findById(job._id);
-        if (!jobDoc) continue;
+        const claim = await claimDelivery(job._id, candidate._id);
+        if (!claim) continue; // someone else claimed it, or no longer due
 
-        // Find the delivery subdocument
-        const deliveryDoc = jobDoc.deliveries.id(delivery._id);
-        if (!deliveryDoc) continue;
-
-        // Process it
-        const updatedDelivery = await processDelivery(jobDoc, deliveryDoc);
-
-        // Update the delivery in the document
-        Object.assign(deliveryDoc, updatedDelivery);
-
-        // Update job lastAttemptedAt
-        jobDoc.lastAttemptedAt = new Date();
-
-        // Save (pre-save hook will recalculate status and counts)
-        await jobDoc.save();
+        const updatedDelivery = await processDelivery(claim.job, claim.delivery);
+        await writeDeliveryResult(job._id, updatedDelivery);
 
         processed++;
       } catch (err) {
         log.error("Error processing delivery", {
           jobId: job.id,
-          deliveryId: delivery._id,
+          deliveryId: candidate._id,
           error: err.message,
           stack: err.stack,
         });
@@ -305,23 +396,29 @@ export async function processOutboxBatch() {
 export function startOutboxWorker(intervalMs = 5000) {
   log.info("Starting outbox worker", { intervalMs });
 
-  const handle = setInterval(async () => {
+  // setInterval fires regardless of whether the previous batch finished; a
+  // slow batch (up to batchSize x deliveries x 10s) would overlap the next
+  // tick and re-send. Skip ticks while a batch is still running.
+  let running = false;
+  const tick = async (label) => {
+    if (running) return;
+    running = true;
     try {
       await processOutboxBatch();
     } catch (err) {
-      log.error("Outbox worker error", {
+      log.error(label, {
         error: err.message,
         stack: err.stack,
       });
+    } finally {
+      running = false;
     }
-  }, intervalMs);
+  };
+
+  const handle = setInterval(() => tick("Outbox worker error"), intervalMs);
 
   // Process immediately on start
-  processOutboxBatch().catch((err) => {
-    log.error("Initial outbox worker error", {
-      error: err.message,
-    });
-  });
+  tick("Initial outbox worker error");
 
   return handle;
 }

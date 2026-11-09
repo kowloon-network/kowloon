@@ -3,6 +3,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import express from "express";
+import sanitizeQuery from "./middleware/sanitizeQuery.js";
+import { moderateRateLimiter } from "./middleware/rateLimiter.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -36,6 +38,11 @@ router.use(
   })
 );
 router.use(express.urlencoded({ extended: false, limit: JSON_LIMIT }));
+
+// SECURITY: strip Mongo operator objects from the query string (?a[$ne]=x).
+// See routes/middleware/sanitizeQuery.js for why this instead of mongoose's
+// sanitizeFilter.
+router.use(sanitizeQuery);
 
 // --- request logging ---------------------------------------------------------
 const API_LOG =
@@ -82,6 +89,22 @@ router.use((req, _res, next) => {
   if (SPA_SEGMENTS.has(seg)) return next("router");
   next();
 });
+
+// --- per-endpoint rate limits -------------------------------------------------
+// Expensive/abusable endpoints that had no limiter. Applied here at the mount
+// point (rather than inside each router) so those handlers stay untouched.
+// Each gets its own limiter instance = its own counter. Placed after the SPA
+// guard so browser page loads of /search etc. aren't counted. Inbox is
+// deliberately NOT here (federation peers share IPs; it has its own limiter).
+{
+  const onlyMethod = (method, limiter) => (req, res, next) =>
+    req.method === method ? limiter(req, res, next) : next();
+  router.post(["/files", "/files/upload"], moderateRateLimiter("Too many uploads, please try again later"));
+  router.use("/preview", onlyMethod("GET", moderateRateLimiter("Too many preview requests, please try again later")));
+  router.use("/search", onlyMethod("GET", moderateRateLimiter("Too many search requests, please try again later")));
+  router.post("/oauth/exchange", moderateRateLimiter("Too many requests, please try again later"));
+  router.use("/invites", moderateRateLimiter("Too many invite requests, please try again later"));
+}
 
 // ---------------------------------------------------------------------------
 // dynamic route mounting

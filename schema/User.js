@@ -159,6 +159,10 @@ const UserSchemaDef = {
   // along with the revision date of each document AT THE TIME OF
   // ACCEPTANCE -- that's what makes it possible to say later which text a
   // given user actually agreed to, since the pages are editable.
+  // Any JWT whose iat is earlier than this is rejected (routes/utils/route.js
+  // isAccountUsable). Stamped on password change/reset so the change signs
+  // out every other device.
+  tokensValidAfter: { type: Date, default: null },
   acceptedTerms: {
     _id: false,
     acceptedAt: { type: Date },

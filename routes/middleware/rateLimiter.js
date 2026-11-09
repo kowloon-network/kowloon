@@ -3,19 +3,27 @@
 import crypto from "crypto";
 import logger from "#methods/utils/logger.js";
 
-// Store for tracking request counts per IP
-// Structure: { ip: { count: number, resetTime: timestamp } }
-const requestCounts = new Map();
+// Each limiter gets its OWN store (Map ip -> { count, resetTime }). They used
+// to share one module-level Map keyed only by IP, so every limiter counted
+// every other limiter's hits and the first one to start a window set the
+// window length for all of them.
+const allStores = new Set();
 
-// Cleanup old entries every 10 minutes
+// Hard cap per store so a flood of distinct (spoofed/rotating) IPs can't grow
+// memory without bound. Map iteration is insertion order and windows are
+// re-inserted on reset, so the first key is the oldest window.
+const MAX_ENTRIES_PER_STORE = 50_000;
+
+// Cleanup expired entries every 10 minutes. unref() so it never holds the
+// process (or a test run) open.
 setInterval(() => {
   const now = Date.now();
-  for (const [ip, data] of requestCounts.entries()) {
-    if (data.resetTime < now) {
-      requestCounts.delete(ip);
+  for (const store of allStores) {
+    for (const [ip, data] of store.entries()) {
+      if (data.resetTime < now) store.delete(ip);
     }
   }
-}, 10 * 60 * 1000);
+}, 10 * 60 * 1000).unref?.();
 
 /**
  * Rate limiter middleware
@@ -29,28 +37,34 @@ export function createRateLimiter({
   max = 100,
   message = "Too many requests, please try again later",
 } = {}) {
+  const requestCounts = new Map();
+  allStores.add(requestCounts);
+
   return function rateLimiter(req, res, next) {
     // Skip rate limiting if disabled via environment variable
     if (process.env.RATE_LIMITING_ENABLED === "false") {
       return next();
     }
 
-    // Get client IP (handle proxies)
-    const ip =
-      req.headers["x-forwarded-for"]?.split(",")[0].trim() ||
-      req.headers["x-real-ip"] ||
-      req.socket.remoteAddress ||
-      req.connection.remoteAddress;
+    // Client IP. The first X-Forwarded-For entry is whatever the client
+    // claims (trivially spoofed to dodge the limit). req.ip honors the app's
+    // `trust proxy` setting (index.js: 1 hop -- our single Caddy/nginx), so
+    // it's the address our own proxy actually saw.
+    const ip = req.ip || req.socket?.remoteAddress || "unknown";
 
     const now = Date.now();
     const record = requestCounts.get(ip);
 
     // No record or window expired - start fresh
     if (!record || record.resetTime < now) {
+      requestCounts.delete(ip); // re-insert at the newest end (eviction order)
       requestCounts.set(ip, {
         count: 1,
         resetTime: now + windowMs,
       });
+      while (requestCounts.size > MAX_ENTRIES_PER_STORE) {
+        requestCounts.delete(requestCounts.keys().next().value);
+      }
       return next();
     }
 
@@ -116,6 +130,14 @@ export const lookupRateLimiter = createRateLimiter({
   max: 60,
   message: "Too many lookup requests, please try again later",
 });
+
+// Moderate limiter for expensive or abusable endpoints that aren't auth-
+// sensitive: file upload, link preview (server-side fetch of arbitrary URLs),
+// search, cross-server OAuth exchange, invite-code lookup. Each mount gets its
+// own instance (own counter) via this factory.
+export function moderateRateLimiter(message = "Too many requests, please try again later") {
+  return createRateLimiter({ windowMs: 60 * 1000, max: 30, message });
+}
 
 // ── Activity deduplicator ─────────────────────────────────────────────────────
 // Rejects identical activities submitted back-to-back within a short window.

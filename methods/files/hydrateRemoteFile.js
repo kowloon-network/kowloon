@@ -29,6 +29,34 @@ import kowloonId from "#methods/parse/kowloonId.js";
 import isLocalDomain from "#methods/parse/isLocalDomain.js";
 import { getStorageAdapter } from "#methods/files/index.js";
 import signHttpRequest from "#methods/federation/signHttpRequest.js";
+import { isSafeUrl, safeFetch } from "#methods/utils/safeUrl.js";
+import { ALLOWED_MIME_TYPES } from "#methods/files/validateUpload.js";
+
+// SECURITY: a remote origin's /meta response used to choose BOTH the URL we
+// fetch bytes from (no SSRF check -- any internal host) AND the Content-Type
+// we later serve those bytes with from OUR origin (text/html => stored XSS on
+// our domain). Now:
+//   - the bytes URL must be on the file's own origin domain and pass the
+//     shared SSRF guard (all fetches go through safeFetch, which re-checks
+//     every redirect hop);
+//   - mediaType is restricted to the same allowlist uploads use, minus SVG
+//     (remote SVGs never went through our upload-time SVG sanitizer).
+const REMOTE_ALLOWED_MIME_TYPES = new Set(
+  [...ALLOWED_MIME_TYPES].filter((t) => t !== "image/svg+xml")
+);
+
+export function normalizeRemoteMediaType(mt) {
+  const base = String(mt || "").toLowerCase().split(";")[0].trim();
+  return REMOTE_ALLOWED_MIME_TYPES.has(base) ? base : "";
+}
+
+async function isAllowedBytesUrl(url, domain) {
+  let u;
+  try { u = new URL(url); } catch { return false; }
+  if (u.protocol !== "https:" && u.protocol !== "http:") return false;
+  if (u.hostname.toLowerCase() !== String(domain).toLowerCase()) return false;
+  return isSafeUrl(url);
+}
 
 const FRESH_MS = 24 * 60 * 60 * 1000; // re-fetch a shadow's meta at most daily
 const REMOTE_CACHE_PREFIX = "remote-cache";
@@ -36,8 +64,12 @@ const REMOTE_CACHE_PREFIX = "remote-cache";
 // Fetch a remote file's bytes and store them locally. Returns the new
 // storageKey, or null on any failure (non-fatal — retried on next hydration,
 // or self-healed via serve.js's lazy fallback).
-async function fetchAndStoreBytes({ fileId, url, mediaType, extension, actorId }, fetcher) {
+async function fetchAndStoreBytes({ fileId, url, mediaType, extension, actorId, domain }, fetcher) {
   if (!url) return null;
+  // Only cache bytes for allowlisted media types, fetched from the file's
+  // own origin (see the SECURITY note above).
+  if (!normalizeRemoteMediaType(mediaType)) return null;
+  if (!(await isAllowedBytesUrl(url, domain))) return null;
   try {
     // Signed so the origin can authorize us for restricted media by domain
     // (see routes/files/serve.js's S2S branch) — harmless/ignored by the
@@ -63,7 +95,7 @@ async function fetchAndStoreBytes({ fileId, url, mediaType, extension, actorId }
 }
 
 // Returns the cached File doc (lean) or null. Never throws.
-export async function hydrateRemoteFile(fileId, { fetcher = fetch } = {}) {
+export async function hydrateRemoteFile(fileId, { fetcher = safeFetch } = {}) {
   if (typeof fileId !== "string" || !fileId.startsWith("file:")) return null;
   const parsed = kowloonId(fileId);
   const domain = parsed?.domain;
@@ -106,8 +138,8 @@ export async function hydrateRemoteFile(fileId, { fetcher = fetch } = {}) {
       name: meta.name || meta.originalFileName || "",
       summary: meta.summary || "",
       type: meta.type || "",
-      mediaType: meta.mediaType || "",
-      extension: meta.extension || "",
+      mediaType: normalizeRemoteMediaType(meta.mediaType),
+      extension: String(meta.extension || "").replace(/[^a-zA-Z0-9]/g, "").slice(0, 10),
       // Honest passthrough of the origin's own File.to. NOT the real
       // restriction signal for post attachments — a File's own `to` is
       // almost always "@public" regardless of its parent post's real
@@ -124,7 +156,11 @@ export async function hydrateRemoteFile(fileId, { fetcher = fetch } = {}) {
       // The origin's own proxy URL — used to fetch bytes below; superseded
       // as the client-facing URL once storageKey is set (fileServeUrl then
       // builds a URL on OUR proxy instead).
-      url: meta.url || `https://${domain}/files/${encodeURIComponent(fileId)}`,
+      // Must be on the origin's own domain; anything else falls back to the
+      // canonical proxy URL there.
+      url:
+        (typeof meta.url === "string" && (await isAllowedBytesUrl(meta.url, domain)) && meta.url) ||
+        `https://${domain}/files/${encodeURIComponent(fileId)}`,
       server: `@${domain}`,
       originDomain: domain,
       size: meta.size,
@@ -136,7 +172,7 @@ export async function hydrateRemoteFile(fileId, { fetcher = fetch } = {}) {
 
   if (!doc.storageKey) {
     const key = await fetchAndStoreBytes(
-      { fileId, url: doc.url, mediaType: doc.mediaType, extension: doc.extension, actorId: doc.actorId },
+      { fileId, url: doc.url, mediaType: doc.mediaType, extension: doc.extension, actorId: doc.actorId, domain },
       fetcher
     );
     if (key) doc.storageKey = key;

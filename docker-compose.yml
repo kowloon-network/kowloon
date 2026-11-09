@@ -119,6 +119,7 @@ services:
       PORT: 3000
       MONGO_URI: mongodb://mongodb:27017/kowloon1
       NODE_ENV: development
+      ALLOW_PRIVATE_FETCH: "true"  # dev only: kwln*.local resolve to docker IPs (methods/utils/safeUrl.js)
       NODE_TLS_REJECT_UNAUTHORIZED: "0"
       RATE_LIMITING_ENABLED: "false"
       S3_ENDPOINT: http://minio:9000
@@ -144,6 +145,7 @@ services:
       DOMAIN: kwln1.local
       MONGO_URI: mongodb://mongodb:27017/kowloon1
       NODE_ENV: development
+      ALLOW_PRIVATE_FETCH: "true"  # dev only: kwln*.local resolve to docker IPs (methods/utils/safeUrl.js)
       NODE_TLS_REJECT_UNAUTHORIZED: "0"
       S3_ENDPOINT: http://minio:9000
       S3_BUCKET: kwln1
@@ -166,6 +168,7 @@ services:
       DOMAIN: kwln1.local
       MONGO_URI: mongodb://mongodb:27017/kowloon1
       NODE_ENV: development
+      ALLOW_PRIVATE_FETCH: "true"  # dev only: kwln*.local resolve to docker IPs (methods/utils/safeUrl.js)
       NODE_TLS_REJECT_UNAUTHORIZED: "0"
       S3_ENDPOINT: http://minio:9000
       S3_BUCKET: kwln1
@@ -189,6 +192,7 @@ services:
       DOMAIN: kwln1.local
       MONGO_URI: mongodb://mongodb:27017/kowloon1
       NODE_ENV: development
+      ALLOW_PRIVATE_FETCH: "true"  # dev only: kwln*.local resolve to docker IPs (methods/utils/safeUrl.js)
       S3_ENDPOINT: http://minio:9000
       S3_BUCKET: kwln1
     volumes:
@@ -212,6 +216,7 @@ services:
       PORT: 3000
       MONGO_URI: mongodb://mongodb:27017/kowloon2
       NODE_ENV: development
+      ALLOW_PRIVATE_FETCH: "true"  # dev only: kwln*.local resolve to docker IPs (methods/utils/safeUrl.js)
       NODE_TLS_REJECT_UNAUTHORIZED: "0"
       RATE_LIMITING_ENABLED: "false"
       S3_ENDPOINT: http://minio:9000
@@ -237,6 +242,7 @@ services:
       DOMAIN: kwln2.local
       MONGO_URI: mongodb://mongodb:27017/kowloon2
       NODE_ENV: development
+      ALLOW_PRIVATE_FETCH: "true"  # dev only: kwln*.local resolve to docker IPs (methods/utils/safeUrl.js)
       NODE_TLS_REJECT_UNAUTHORIZED: "0"
       S3_ENDPOINT: http://minio:9000
       S3_BUCKET: kwln2
@@ -259,6 +265,7 @@ services:
       DOMAIN: kwln2.local
       MONGO_URI: mongodb://mongodb:27017/kowloon2
       NODE_ENV: development
+      ALLOW_PRIVATE_FETCH: "true"  # dev only: kwln*.local resolve to docker IPs (methods/utils/safeUrl.js)
       NODE_TLS_REJECT_UNAUTHORIZED: "0"
       S3_ENDPOINT: http://minio:9000
       S3_BUCKET: kwln2
@@ -282,6 +289,7 @@ services:
       DOMAIN: kwln2.local
       MONGO_URI: mongodb://mongodb:27017/kowloon2
       NODE_ENV: development
+      ALLOW_PRIVATE_FETCH: "true"  # dev only: kwln*.local resolve to docker IPs (methods/utils/safeUrl.js)
       S3_ENDPOINT: http://minio:9000
       S3_BUCKET: kwln2
     volumes:
@@ -305,6 +313,7 @@ services:
       PORT: 3000
       MONGO_URI: mongodb://mongodb:27017/kowloon3
       NODE_ENV: development
+      ALLOW_PRIVATE_FETCH: "true"  # dev only: kwln*.local resolve to docker IPs (methods/utils/safeUrl.js)
       NODE_TLS_REJECT_UNAUTHORIZED: "0"
       RATE_LIMITING_ENABLED: "false"
       S3_ENDPOINT: http://minio:9000
@@ -330,6 +339,7 @@ services:
       DOMAIN: kwln3.local
       MONGO_URI: mongodb://mongodb:27017/kowloon3
       NODE_ENV: development
+      ALLOW_PRIVATE_FETCH: "true"  # dev only: kwln*.local resolve to docker IPs (methods/utils/safeUrl.js)
       NODE_TLS_REJECT_UNAUTHORIZED: "0"
       S3_ENDPOINT: http://minio:9000
       S3_BUCKET: kwln3
@@ -352,6 +362,7 @@ services:
       DOMAIN: kwln3.local
       MONGO_URI: mongodb://mongodb:27017/kowloon3
       NODE_ENV: development
+      ALLOW_PRIVATE_FETCH: "true"  # dev only: kwln*.local resolve to docker IPs (methods/utils/safeUrl.js)
       NODE_TLS_REJECT_UNAUTHORIZED: "0"
       S3_ENDPOINT: http://minio:9000
       S3_BUCKET: kwln3
@@ -375,6 +386,7 @@ services:
       DOMAIN: kwln3.local
       MONGO_URI: mongodb://mongodb:27017/kowloon3
       NODE_ENV: development
+      ALLOW_PRIVATE_FETCH: "true"  # dev only: kwln*.local resolve to docker IPs (methods/utils/safeUrl.js)
       S3_ENDPOINT: http://minio:9000
       S3_BUCKET: kwln3
     volumes:

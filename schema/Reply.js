@@ -32,7 +32,7 @@ const ObjectId = mongoose.Types.ObjectId;
 
 const ReplySchema = new Schema(
   {
-    id: { type: String, key: true },
+    id: { type: String },
     actorId: { type: String },
     actor: { type: Object, default: undefined },
     server: { type: String, default: undefined }, // The server of the actor
@@ -104,5 +104,11 @@ ReplySchema.pre("findOneAndUpdate", async function (next) {
   }
   next();
 });
+
+// `key: true` is not a Mongoose option -- `id` was never indexed, so every
+// findOne({ id }) was a collection scan. Partial (string-only) so any legacy
+// doc missing `id` can't block the unique build.
+ReplySchema.index({ id: 1 }, { unique: true, partialFilterExpression: { id: { $type: "string" } } });
+ReplySchema.index({ target: 1, createdAt: 1 }); // thread listing per parent
 
 export default mongoose.model("Reply", ReplySchema);

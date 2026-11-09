@@ -16,6 +16,8 @@ import { getSetting } from "#methods/settings/cache.js";
 import { getViewerContext } from "#methods/visibility/context.js";
 import { buildVisibilityQuery } from "#methods/visibility/filter.js";
 import { gateUserProfile } from "#methods/sanitize/object.js";
+import { safeFetch } from "#methods/utils/safeUrl.js";
+import { canSeeFolderChain } from "#methods/bookmarks/visibility.js";
 
 // Federated handle patterns — mirrors /users/search logic
 const REMOTE_HANDLE_RE = /^@?([^@]+)@([^@]+\.[^@]+)$/;
@@ -31,7 +33,10 @@ async function proxyUserSearch(domain, q) {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), 8000);
   try {
-    const res = await fetch(url, { headers: { Accept: "application/json" }, signal: ctrl.signal });
+    // SECURITY: the domain here is user-supplied (a handle or id), so route the
+    // request through the shared SSRF guard (blocks internal hosts, re-checks
+    // every redirect hop).
+    const res = await safeFetch(url, { headers: { Accept: "application/json" }, signal: ctrl.signal });
     if (!res.ok) return [];
     const data = await res.json();
     return data?.orderedItems ?? data?.items ?? [];
@@ -65,7 +70,9 @@ const SEARCHABLE = {
   },
   Bookmark: {
     model: Bookmark,
-    select: "id type title summary href target url tags to createdAt",
+    // parentFolder/actorId are only selected for the folder-chain check
+    // below and stripped from the response.
+    select: "id type title summary href target url tags to createdAt parentFolder actorId",
   },
 };
 
@@ -276,6 +283,16 @@ router.get(
               .lean();
 
             for (const doc of docs) {
+              if (typeName === "Bookmark") {
+                // SECURITY: a nominally @public bookmark inside a private
+                // folder must stay hidden (read-time folder inheritance, same
+                // rule as GET /users/:id/bookmarks). buildVisibilityQuery only
+                // checks the bookmark's own `to`.
+                const isOwner = ctx.viewerId && doc.actorId === ctx.viewerId;
+                if (!isOwner && !(await canSeeFolderChain(doc.parentFolder, ctx))) continue;
+                delete doc.parentFolder;
+                delete doc.actorId;
+              }
               allResults.push({
                 ...doc,
                 _searchType: typeName,

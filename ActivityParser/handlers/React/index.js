@@ -25,6 +25,7 @@ import {
   User,
   FeedItems,
 } from "#schema";
+import mongoose from "mongoose";
 import createNotification from "#methods/notifications/create.js";
 import kowloonId from "#methods/parse/kowloonId.js";
 import { getServerSettings } from "#methods/settings/schemaHelpers.js";
@@ -85,6 +86,41 @@ export async function syncTargetReactState(targetId) {
     /* non-fatal — display-only fields */
   }
   return count;
+}
+
+/**
+ * Atomically set this actor's reaction on a target. Returns the PREVIOUS
+ * reaction doc (null if this inserted a new one). Upserts skip the pre-save
+ * hook, so id/server are minted here with $setOnInsert. A concurrent insert
+ * of the same (actorId, target) loses the unique-index race with E11000; the
+ * retry then matches the winner's row and updates it.
+ */
+async function upsertReact({ actorId, targetId, emoji, name }) {
+  const { domain, actorId: serverActorId } = getServerSettings();
+  const run = () => {
+    const _id = new mongoose.Types.ObjectId();
+    return ReactModel.findOneAndUpdate(
+      { actorId, target: targetId },
+      {
+        // name is required on the model; clients send name || emoji, so
+        // mirror that for peers that omit it (validators don't run on upsert).
+        $set: { emoji, name: name || emoji },
+        $setOnInsert: {
+          _id,
+          id: `react:${_id}@${domain}`,
+          type: "React",
+          server: serverActorId,
+        },
+      },
+      { upsert: true, new: false, timestamps: true }
+    ).lean();
+  };
+  try {
+    return await run();
+  } catch (err) {
+    if (err?.code !== 11000) throw err;
+    return await run();
+  }
 }
 
 /**
@@ -175,41 +211,31 @@ export default async function React(activity, ctx = {}) {
       }
     }
 
-    // This user's current reaction(s) on this target. The old model allowed
-    // more than one; collapse to a single reaction on any write.
-    const existing = await ReactModel.find({ actorId, target: targetId })
-      .select("emoji")
-      .lean();
-    const hadAny = existing.length > 0;
-    const alreadyThis =
-      !clearing && existing.length === 1 && existing[0].emoji === reactKind;
-
+    // One reaction per (actorId, target), enforced by a unique index. Writes
+    // are single atomic operations -- the old find -> deleteMany -> create
+    // sequence raced (double-tap / retried request) into duplicate reacts.
     let status;
     let isNew = false;
     let changed = false;
 
     if (clearing) {
-      if (hadAny) {
-        await ReactModel.deleteMany({ actorId, target: targetId });
+      // deleteMany (not findOneAndDelete) also sweeps any legacy duplicates.
+      const { deletedCount } = await ReactModel.deleteMany({ actorId, target: targetId });
+      if (deletedCount > 0) {
         status = "unreacted";
         changed = true;
       } else {
         status = "no_change";
       }
-    } else if (alreadyThis) {
-      status = "already_reacted";
     } else {
-      // Add or replace — collapse to exactly one reaction with the new emoji.
-      if (hadAny) await ReactModel.deleteMany({ actorId, target: targetId });
-      await ReactModel.create({
-        actorId,
-        target: targetId,
-        emoji: reactKind,
-        name: reactName,
-      });
-      isNew = !hadAny;
-      status = isNew ? "reacted" : "replaced";
-      changed = true;
+      const previous = await upsertReact({ actorId, targetId, emoji: reactKind, name: reactName });
+      if (previous && previous.emoji === reactKind) {
+        status = "already_reacted";
+      } else {
+        isNew = !previous;
+        status = isNew ? "reacted" : "replaced";
+        changed = true;
+      }
     }
 
     if (!changed) {

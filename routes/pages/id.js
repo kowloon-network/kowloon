@@ -8,8 +8,10 @@ import { Page } from "#schema";
 import isLocalDomain from "#methods/parse/isLocalDomain.js";
 import { hydrateRemotePage } from "#methods/pages/hydrateRemotePage.js";
 import { enrichAttachments } from "#methods/files/enrichAttachments.js";
+import { getViewerContext } from "#methods/visibility/context.js";
+import { canSeeObject } from "#methods/visibility/helpers.js";
 
-export default route(async ({ req, params, query, set, setStatus }) => {
+export default route(async ({ req, params, query, user, set, setStatus }) => {
   const idOrSlug = decodeURIComponent(params.id);
   const domain = typeof query?.domain === "string" ? query.domain : null;
 
@@ -30,6 +32,15 @@ export default route(async ({ req, params, query, set, setStatus }) => {
   const page =
     (await Page.findOne({ id: idOrSlug, deletedAt: null }).lean()) ||
     (await Page.findOne({ slug: idOrSlug, deletedAt: null }).lean());
+
+  // SECURITY: honour the page's `to` (GET /pages only ever listed @public
+  // pages, but this route served any page to anyone who knew its slug).
+  // 404 rather than 403 so a restricted page's existence isn't confirmed.
+  if (page && !(await canSeeObject(page, await getViewerContext(user?.id || null)))) {
+    setStatus(404);
+    set("error", "Page not found");
+    return;
+  }
 
   if (!page) {
     setStatus(404);

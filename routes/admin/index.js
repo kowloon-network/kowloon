@@ -2,9 +2,8 @@
 // Admin API — all routes require server admin membership
 
 import express from "express";
-import { jwtVerify, importSPKI } from "jose";
 import isServerAdmin from "#methods/auth/isServerAdmin.js";
-import getSettings from "#methods/settings/get.js";
+import { authenticateRequest, AuthUnavailable } from "#routes/utils/route.js";
 import { create, list, getOne, deactivate } from "./invites.js";
 import activitiesRouter from "./activities.js";
 import usersRouter from "./users.js";
@@ -39,50 +38,34 @@ router.use((req, res, next) => {
 
 // Admin auth guard middleware
 router.use(async (req, res, next) => {
+  // SECURITY (2026-11-09): this guard used to verify the JWT itself and only
+  // refused user.scope === "visiting". A forged cross-server login produced a
+  // token with user.visiting === true naming a LOCAL admin, which sailed
+  // through. It now uses the same authenticateRequest() as every route()
+  // handler (revocation, tokensValidAfter, local-domain check, visiting
+  // session validation), then refuses BOTH kinds of cross-server token.
+  let user;
   try {
-    const auth = req.headers.authorization || "";
-    const match = auth.match(/^(?:Bearer|Token)\s+(.+)$/i);
-    const token = match?.[1]?.trim();
-
-    if (!token) {
-      return res.status(401).json({ error: "Authentication required" });
-    }
-
-    const settings = await getSettings();
-    const pub = settings?.publicKey?.replace(/\\n/g, "\n").trim();
-    if (!pub) return res.status(500).json({ error: "Server misconfigured" });
-
-    const publicKey = await importSPKI(pub, "RS256");
-    const { payload } = await jwtVerify(token, publicKey, {
-      algorithms: ["RS256"],
-      issuer: `https://${settings.domain}`,
-    });
-
-    const userId = payload?.user?.id || payload?.id || payload?.sub;
-    if (!userId) return res.status(401).json({ error: "Invalid token" });
-
-    // A scope:"visiting" token is held by a FOREIGN server acting on this
-    // user's behalf via cross-server OAuth. Being an admin HERE must not hand
-    // admin powers to a server they merely signed into over there — visiting
-    // sessions are only ever granted interaction-shaped actions. Scope was
-    // previously checked only in routes/outbox/post.js, so every /admin route
-    // accepted one of these happily.
-    if (payload?.user?.scope === "visiting") {
-      return res
-        .status(403)
-        .json({ error: "A visiting session cannot use admin routes" });
-    }
-
-    const admin = await isServerAdmin(userId);
-    if (!admin) {
-      return res.status(403).json({ error: "Server admin access required" });
-    }
-
-    req.user = payload.user || { id: userId };
-    next();
+    user = await authenticateRequest(req);
   } catch (err) {
+    if (err instanceof AuthUnavailable) {
+      return res.status(503).json({ error: "Temporarily unable to verify your session" });
+    }
     return res.status(401).json({ error: "Invalid or expired token" });
   }
+  if (!user) return res.status(401).json({ error: "Authentication required" });
+
+  if (user.scope === "visiting" || user.visiting) {
+    return res
+      .status(403)
+      .json({ error: "A visiting session cannot use admin routes" });
+  }
+
+  const admin = await isServerAdmin(user.id);
+  if (!admin) {
+    return res.status(403).json({ error: "Server admin access required" });
+  }
+  next();
 });
 
 // ── Invites ───────────────────────────────────────────────────────────────────

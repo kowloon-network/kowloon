@@ -80,10 +80,15 @@ export default async function notifyFeedActivity(post) {
     // ── GROUP posts → one throttled notification per group ──────────────────
     if (groupIds.length) {
       const groups = await Group.find({ id: { $in: groupIds } })
-        .select("id name members")
+        .select("id name circles.members")
         .lean();
       for (const g of groups) {
-        const recipients = await optedIn((g.members || []).map((m) => m.id), authorId);
+        // Group has no top-level `members`; they live in the Circle at
+        // g.circles.members (g.members was always undefined -> nobody notified).
+        const membersCircle = g.circles?.members
+          ? await Circle.findOne({ id: g.circles.members }).select("members.id").lean()
+          : null;
+        const recipients = await optedIn((membersCircle?.members || []).map((m) => m.id), authorId);
         for (const recipientId of recipients) {
           await createNotification({
             type: "new_post",

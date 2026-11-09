@@ -47,6 +47,13 @@ await initKowloon(Kowloon, {
 // 4) Build Express
 const app = express();
 
+// Exactly ONE reverse proxy sits in front of the app (Caddy in production,
+// nginx in local docker). Trusting one hop makes req.ip the address that proxy
+// saw (the right-most X-Forwarded-For entry it appended), which the rate
+// limiters key on -- instead of the client-controlled first entry. Override
+// with TRUST_PROXY_HOPS for a different topology (0 = no proxy).
+app.set("trust proxy", Number(process.env.TRUST_PROXY_HOPS ?? 1));
+
 // Allow the server's own origin by default. Admins running the frontend on a
 // separate domain can set CORS_ORIGIN (comma-separated) to add extra origins.
 // Federation (server-to-server) and native clients are unaffected by CORS.
@@ -179,8 +186,16 @@ http.createServer(app).listen(port, "0.0.0.0", () => {
   console.log(`HTTP listening on :${port}`);
 });
 
-// Start outbox worker for federation (outbound delivery)
-try {
+// Start outbox worker for federation (outbound delivery).
+// Default ON so single-container installs keep delivering. Stacks that also
+// run the dedicated worker-outbox container (workers/outboxPush.js -- the
+// installer's generated compose does) should set
+// DISABLE_INPROCESS_OUTBOX_WORKER=true so only one process polls the queue.
+// (Deliveries are claimed atomically, so two pollers no longer double-send,
+// but there's no reason to run both.)
+if (process.env.DISABLE_INPROCESS_OUTBOX_WORKER === "true") {
+  console.log("In-process outbox worker disabled (DISABLE_INPROCESS_OUTBOX_WORKER=true)");
+} else try {
   const { startOutboxWorker } = await import(
     "#methods/federation/outboxWorker.js"
   );
