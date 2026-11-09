@@ -126,7 +126,9 @@ export default route(async ({ req, params, query, user, set, setStatus }) => {
   set("type", "OrderedCollectionPage");
   set("id", req.originalUrl ? `${protocol}://${domain}${req.originalUrl}` : baseUrl);
   set("partOf", baseUrl);
-  set("totalItems", result.total);
+  // getTimeline no longer counts (was a full count per page); null = unknown.
+  // Clients page via nextCursor.
+  set("totalItems", result.total ?? null);
   set("orderedItems", orderedItems);
   if (result.nextCursor) {
     set("nextCursor", result.nextCursor);

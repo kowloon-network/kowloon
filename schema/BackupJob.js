@@ -13,12 +13,16 @@ const BackupJobSchema = new Schema(
     archiveKey:   { type: String },   // S3 key for the archive (backup output or restore input)
     archiveName:  { type: String },   // human-readable filename
     error:        { type: String },
+    // Claim lease, renewed by a heartbeat while running. Expired 'running'
+    // jobs (crashed worker) are recovered on the next tick.
+    leaseUntil:   { type: Date },
     expiresAt:    { type: Date },     // TTL — auto-deleted 48h after completion
   },
   { timestamps: true }
 )
 
 BackupJobSchema.index({ status: 1, createdAt: -1 })
+BackupJobSchema.index({ status: 1, leaseUntil: 1 })
 BackupJobSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 })
 
 export default mongoose.model('BackupJob', BackupJobSchema)

@@ -2,7 +2,7 @@ import express from "express";
 import { getPreviewFromContent } from "link-preview-js";
 import route from "../utils/route.js";
 import { isSafeUrl, safeFetch } from "#methods/utils/safeUrl.js";
-import { canView, buildFollowerMap } from "#methods/feed/visibility.js";
+import { canView } from "#methods/feed/visibility.js";
 import { getViewerContext } from "#methods/visibility/context.js";
 import { canSeeObject } from "#methods/visibility/helpers.js";
 import { getSetting } from "#methods/settings/cache.js";
@@ -185,8 +185,7 @@ async function viewerCanSeeLocalPost(postId, viewerId) {
     tombstoned: { $ne: true },
   }).lean();
   if (!item) return false;
-  const followerMap = await buildFollowerMap([item.actorId]);
-  return canView(item, viewerId, { followerMap });
+  return canView(item, viewerId);
 }
 
 // Recognize a Kowloon object URL by the prefixed, server-qualified ID in its

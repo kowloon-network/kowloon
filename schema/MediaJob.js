@@ -13,11 +13,15 @@ const MediaJobSchema = new Schema({
   processorUsed: { type: String },
   error:        { type: String },
   processedAt:  { type: Date },
+  // Claim lease: a 'processing' job whose lease expired (worker crashed /
+  // was killed mid-job) is requeued by the worker's next tick.
+  leaseUntil:   { type: Date },
   // TTL: completed/failed records expire 7 days after processing
   expiresAt:    { type: Date },
 }, { timestamps: true })
 
 MediaJobSchema.index({ status: 1, nextAttemptAt: 1 })
+MediaJobSchema.index({ status: 1, leaseUntil: 1 })
 MediaJobSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 })
 
 export default mongoose.model('MediaJob', MediaJobSchema)

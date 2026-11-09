@@ -133,6 +133,8 @@ const ServerSchema = new Schema(
         default: undefined,
       },
       lastSuccessfulPollAt: { type: Date, default: undefined },
+      // Next pull's `since`: newest remote publishedAt received (pollWorker).
+      pullCursor: { type: Date, default: undefined },
     },
 
     // Unified pull tracking (for new /.well-known/kowloon/pull endpoint)

@@ -128,7 +128,9 @@ async function processServer(server) {
     return;
   }
 
-  const since = server.scheduler?.lastSuccessfulPollAt ?? null;
+  // pullCursor = newest remote publishedAt received last time (falls back to
+  // the old wall-clock field for records that predate it).
+  const since = server.scheduler?.pullCursor ?? server.scheduler?.lastSuccessfulPollAt ?? null;
 
   const result = await pullFromRemote({
     remoteDomain: domain,
@@ -188,6 +190,7 @@ async function processServer(server) {
         "scheduler.lastError": undefined,
         "scheduler.lastErrorCode": undefined,
         "scheduler.lastSuccessfulPollAt": new Date(),
+        ...(result.newestPublishedAt ? { "scheduler.pullCursor": result.newestPublishedAt } : {}),
         lastPulledAt: new Date(),
         lastPullAttemptedAt: new Date(),
         lastPullError: undefined,

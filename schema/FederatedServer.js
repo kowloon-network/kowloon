@@ -105,6 +105,12 @@ const FederatedServerSchema = new Schema(
 
     // ── Pull scheduling ───────────────────────────────────────────────────────
     lastPulledAt:          { type: Date },
+    // `since` cursors for the next pull: newest remote publishedAt actually
+    // received (NOT wall-clock "now", which lost items beyond one page).
+    // Separate cursors because the user/group pull and the bare-@domain
+    // server pull are different queries over different item sets.
+    pullCursor:            { type: Date },
+    serverPullCursor:      { type: Date },
     lastPullAttemptedAt:   { type: Date },
     nextPullAt:            { type: Date, index: true },
     pullIntervalMs:        { type: Number, default: 300000 }, // adaptive; 5 min default
@@ -148,7 +154,7 @@ FederatedServerSchema.index({ name: 1 });                   // browse / search b
 
 // ── Static methods ────────────────────────────────────────────────────────────
 
-FederatedServerSchema.statics.recordPullSuccess = async function (domain, itemCount, responseTimeMs) {
+FederatedServerSchema.statics.recordPullSuccess = async function (domain, itemCount, responseTimeMs, newestPublishedAt = null) {
   if (!domain) return;
   const now = new Date();
 
@@ -166,6 +172,9 @@ FederatedServerSchema.statics.recordPullSuccess = async function (domain, itemCo
     nextPullAt: new Date(now.getTime() + pullIntervalMs),
     status: "active",
   };
+  // Advance the pull cursor only to what we actually received; with no new
+  // items it stays put so nothing in the window is skipped.
+  if (newestPublishedAt) update.pullCursor = newestPublishedAt;
 
   if (responseTimeMs) {
     const server = await this.findOne({ domain }).select("avgResponseTimeMs").lean();

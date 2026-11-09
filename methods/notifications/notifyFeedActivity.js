@@ -30,6 +30,38 @@ async function optedIn(ids, excludeId) {
   return users.map((u) => u.id);
 }
 
+// Users who have blocked or muted `authorId`. Every circle holding the author
+// is fetched once; a System circle that is its owner's circles.blocked or
+// circles.muted marks that owner as a blocker. Returns the candidate circles
+// too so the public-post path can reuse them.
+async function circlesHoldingAuthor(authorId) {
+  const circles = await Circle.find({ "members.id": authorId })
+    .select("id actorId type")
+    .lean();
+  const systemOwners = [
+    ...new Set(circles.filter((c) => c.type === "System").map((c) => c.actorId)),
+  ];
+  const owners = systemOwners.length
+    ? await User.find({ id: { $in: systemOwners } })
+        .select("id circles.blocked circles.muted")
+        .lean()
+    : [];
+  const silencingCircleIds = new Set();
+  const blockers = new Set();
+  const held = new Set(circles.map((c) => c.id));
+  for (const u of owners) {
+    for (const cid of [u.circles?.blocked, u.circles?.muted]) {
+      if (cid && held.has(cid)) {
+        silencingCircleIds.add(cid);
+        blockers.add(u.id);
+      }
+    }
+  }
+  return { circles, silencingCircleIds, blockers };
+}
+
+const fetchActor = (id) => User.findOne({ id }).select("id profile").lean();
+
 // Fire the generic feed nudge for users who just received NEW feed content via
 // fan-out — the remote half of #75 (a federation pull landing a followed remote
 // user's post). `pairs` = [{ userId, actorId }] where actorId is a triggering
@@ -42,12 +74,15 @@ export async function notifyFeedFanOut(pairs) {
     );
     if (!list.length) return;
     const opted = new Set(await optedIn(list.map((p) => p.userId), null));
+    const actorCache = new Map(); // one actor lookup per author, not per recipient
     for (const { userId, actorId } of list) {
       if (!opted.has(userId)) continue;
+      if (!actorCache.has(actorId)) actorCache.set(actorId, await fetchActor(actorId));
       await createNotification({
         type: "new_post",
         recipientId: userId,
         actorId,
+        actor: actorCache.get(actorId),
         summary: "Your feeds have new posts",
         groupKey: "feed",
         cooldownMs: COOLDOWN_MS,
@@ -77,6 +112,8 @@ export default async function notifyFeedActivity(post) {
       low === "server" ||
       low === `@${dl}`;
 
+    const actor = await fetchActor(authorId);
+
     // ── GROUP posts → one throttled notification per group ──────────────────
     if (groupIds.length) {
       const groups = await Group.find({ id: { $in: groupIds } })
@@ -94,6 +131,7 @@ export default async function notifyFeedActivity(post) {
             type: "new_post",
             recipientId,
             actorId: authorId,
+            actor,
             objectId: g.id,
             objectType: "Group",
             summary: `There are new posts in "${g.name}"`,
@@ -107,12 +145,18 @@ export default async function notifyFeedActivity(post) {
 
     // ── FEED posts (public / server / circle) → single per-user nudge ───────
     let recipientIds = [];
+    if (!isPublicOrServer && !circleIds.length) {
+      return; // private (single user) or unrecognized — no feed nudge
+    }
+    // People who blocked or muted the author never get nudged about them.
+    const { circles: holding, silencingCircleIds, blockers } =
+      await circlesHoldingAuthor(authorId);
     if (isPublicOrServer) {
-      // Followers = local users who have this author in one of their circles.
-      const circles = await Circle.find({ "members.id": authorId })
-        .select("actorId")
-        .lean();
-      recipientIds = circles.map((c) => c.actorId);
+      // Followers = local users who have this author in one of their circles
+      // -- but a Blocked/Muted system circle is not "following".
+      recipientIds = holding
+        .filter((c) => !silencingCircleIds.has(c.id))
+        .map((c) => c.actorId);
     } else if (circleIds.length) {
       // Circle-addressed → the circle's members (the audience).
       const circles = await Circle.find({ id: { $in: circleIds } })
@@ -121,9 +165,8 @@ export default async function notifyFeedActivity(post) {
       const set = new Set();
       for (const c of circles) for (const m of c.members || []) if (m.id) set.add(m.id);
       recipientIds = [...set];
-    } else {
-      return; // private (single user) or unrecognized — no feed nudge
     }
+    recipientIds = recipientIds.filter((id) => !blockers.has(id));
 
     const recipients = await optedIn(recipientIds, authorId);
     for (const recipientId of recipients) {
@@ -131,6 +174,7 @@ export default async function notifyFeedActivity(post) {
         type: "new_post",
         recipientId,
         actorId: authorId,
+        actor,
         // No objectId → generic "your feeds have new posts"; opens the feed.
         summary: "Your feeds have new posts",
         groupKey: "feed",

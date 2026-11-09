@@ -78,9 +78,8 @@ async function canSeeParent(obj, ctx, depth) {
     ? await FeedItems.findOne({ id: targetId, deletedAt: null, tombstoned: { $ne: true } }).lean()
     : null;
   if (!item) return false;
-  const { canView, buildFollowerMap } = await import("#methods/feed/visibility.js");
-  const followerMap = await buildFollowerMap([item.actorId]);
-  return canView(item, ctx?.viewerId || null, { followerMap });
+  const { canView } = await import("#methods/feed/visibility.js");
+  return canView(item, ctx?.viewerId || null);
 }
 
 export async function canSeeObject(obj, ctx, _depth = 0) {

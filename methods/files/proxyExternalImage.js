@@ -13,6 +13,20 @@ const TIMEOUT_MS = 10_000;
 const MAX_SIZE_BYTES = 10 * 1024 * 1024; // 10 MB
 
 export default async function proxyExternalImage({ url, actorId, postId }) {
+  const file = await storeExternalImage({ url, actorId, parentObject: postId });
+  if (!file) return;
+  // Patch the Post and FeedItems with the canonical file: ID
+  await Post.updateOne({ id: postId }, { $set: { image: file.id } });
+  await FeedItems.updateOne({ id: postId }, { $set: { 'object.image': file.id } });
+  return file.id;
+}
+
+// Download an external image into local storage as a File owned by
+// `parentObject` (visibility inherits from it at serve time). Returns the
+// saved File doc, or undefined on any failure (always non-fatal). Shared by
+// the og:image path above and by methods/files/proxyBodyImages.js (inline
+// images in rendered Post/Reply bodies).
+export async function storeExternalImage({ url, actorId, parentObject }) {
   try {
     if (!url || !url.startsWith('http')) return;
 
@@ -90,9 +104,10 @@ export default async function proxyExternalImage({ url, actorId, postId }) {
     const file = new File({
       actorId,
       to: '@public',
-      parentObject: postId,
+      parentObject,
       originalFileName,
       name: originalFileName,
+      sourceUrl: url,
       type: 'Image',
       mediaType: result.metadata?.contentType || contentType,
       extension: originalFileName.split('.').pop()?.toLowerCase(),
@@ -108,11 +123,7 @@ export default async function proxyExternalImage({ url, actorId, postId }) {
     file.url = `https://${domain}/files/${file.id}`;
     await file.save();
 
-    // Patch the Post and FeedItems with the canonical file: ID
-    await Post.updateOne({ id: postId }, { $set: { image: file.id } });
-    await FeedItems.updateOne({ id: postId }, { $set: { 'object.image': file.id } });
-
-    return file.id;
+    return file;
   } catch (err) {
     // Non-fatal — a failed proxy must never break post creation
     console.error(`[proxyExternalImage] Failed to proxy ${url}:`, err.message);

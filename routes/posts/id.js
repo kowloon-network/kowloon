@@ -2,7 +2,6 @@ import route from "../utils/route.js";
 import { FeedItems, Post, React as ReactModel } from "#schema";
 import {
   canView,
-  buildFollowerMap,
   enrichWithCapabilities,
 } from "#methods/feed/visibility.js";
 import { enrichAttachments } from "#methods/files/enrichAttachments.js";
@@ -26,8 +25,7 @@ export default route(async ({ req, params, set, setStatus }) => {
     return;
   }
 
-  const followerMap = await buildFollowerMap([feedCacheItem.actorId]);
-  const allowed = await canView(feedCacheItem, viewerId, { followerMap });
+  const allowed = await canView(feedCacheItem, viewerId);
 
   if (!allowed) {
     setStatus(viewerId ? 403 : 401);
@@ -35,7 +33,7 @@ export default route(async ({ req, params, set, setStatus }) => {
     return;
   }
 
-  const enriched = await enrichWithCapabilities(feedCacheItem, viewerId, { followerMap });
+  const enriched = await enrichWithCapabilities(feedCacheItem, viewerId);
 
   const response = {
     ...enriched.object,

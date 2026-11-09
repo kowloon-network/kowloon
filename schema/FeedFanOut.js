@@ -53,6 +53,10 @@ const FeedFanOutSchema = new Schema(
 // Find posts from people I follow that are public, server, or addressed to me
 FeedFanOutSchema.index({ actorId: 1, to: 1, createdAt: -1 });
 
+// Paged timeline (getTimeline): newest-first by createdAt with an _id
+// tie-break cursor, for each `to` value ("@public"/"@server"/viewerId).
+FeedFanOutSchema.index({ to: 1, createdAt: -1, _id: -1 });
+
 // Find all entries for a specific post (for deletion/updates)
 FeedFanOutSchema.index({ feedItemId: 1 });
 

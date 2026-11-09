@@ -4,6 +4,7 @@
 // Bootstraps the three built-in themes on first startup if they don't exist.
 
 import express from "express";
+import { readFileSync } from "fs";
 import route from "../utils/route.js";
 import { Theme, Settings } from "#schema";
 import isServerAdmin from "#methods/auth/isServerAdmin.js";
@@ -14,10 +15,33 @@ const router = express.Router({ mergeParams: true });
 // ── Built-in theme data ────────────────────────────────────────────────────────
 
 
-// Colors mirror @kowloon/client/theme/palette.json (the single source of truth
-// shared with the mobile app and the web frontend's own CSS codegen) — kept as
-// a literal copy here since the server doesn't depend on the client package.
-// Keep in sync by hand if palette.json changes.
+// Colors are generated from config/palette.json, a vendored copy of the
+// shared design tokens (../design/tokens/palette.json -- the single source of
+// truth for web + mobile). The server image doesn't ship ../design, hence the
+// copy; `node scripts/sync-palette.js` refreshes it and `--check` fails if it
+// has drifted. These used to be a hand-copied literal that went stale (accent
+// stayed #c0394a after the palette moved to vermillion).
+//
+// Shape matches what the web frontend's injectTheme() consumes
+// (frontend/src/features/theme/themeSlice.js): `colors` -> --color-<key>,
+// `postColors` -> --post-color-<key>. header/header-content are omitted on
+// purpose (the signature header stays constant across themes) and post-*
+// tokens move to postColors.
+const PALETTE = JSON.parse(
+  readFileSync(new URL("../../config/palette.json", import.meta.url), "utf8")
+);
+
+function themeColorsFromPalette(mode) {
+  const tokens = PALETTE[mode] || {};
+  const colors = {};
+  const postColors = {};
+  for (const [key, value] of Object.entries(tokens)) {
+    if (key.startsWith("post-")) postColors[key.slice(5)] = value;
+    else if (key !== "header" && key !== "header-content") colors[key] = value;
+  }
+  return { colors, postColors };
+}
+
 const BUILT_IN_THEMES = [
   {
     id: "system",
@@ -36,36 +60,7 @@ const BUILT_IN_THEMES = [
     author: "system",
     colorScheme: "light",
     isBuiltIn: true,
-    colors: {
-      "base-100": "#ffffff",
-      "base-200": "#f4f4f4",
-      "base-300": "#e7e7e7",
-      "base-content": "#1a1a20",
-      "field": "#fcfbf7",
-      "primary": "#5588b1",
-      "primary-content": "#f4f5f7",
-      "secondary": "#393b7a",
-      "secondary-content": "#faf4e8",
-      "accent": "#c0394a",
-      "accent-content": "#f7e8e8",
-      "neutral": "#1a1a20",
-      "neutral-content": "#f4f4f4",
-      "info": "#3c8db8",
-      "info-content": "#f0f6fa",
-      "success": "#2f9956",
-      "success-content": "#f0f8f2",
-      "warning": "#d9b038",
-      "warning-content": "#1a1a20",
-      "error": "#c0394a",
-      "error-content": "#f7e8e8",
-    },
-    postColors: {
-      note: "#b76c00",
-      article: "#006893",
-      media: "#009084",
-      link: "#417843",
-      event: "#cc272e",
-    },
+    ...themeColorsFromPalette("light"),
   },
   {
     id: "kowloon-dark",
@@ -74,36 +69,7 @@ const BUILT_IN_THEMES = [
     author: "system",
     colorScheme: "dark",
     isBuiltIn: true,
-    colors: {
-      "base-100": "#16171d",
-      "base-200": "#1f2129",
-      "base-300": "#2c2f3a",
-      "base-content": "#f4f4f4",
-      "field": "#1f2129",
-      "primary": "#5588b1",
-      "primary-content": "#0e1116",
-      "secondary": "#393b7a",
-      "secondary-content": "#faf4e8",
-      "accent": "#c0394a",
-      "accent-content": "#f7e8e8",
-      "neutral": "#1f2129",
-      "neutral-content": "#f4f4f4",
-      "info": "#3c8db8",
-      "info-content": "#f0f6fa",
-      "success": "#2f9956",
-      "success-content": "#f0f8f2",
-      "warning": "#d9b038",
-      "warning-content": "#1a1a20",
-      "error": "#c0394a",
-      "error-content": "#f7e8e8",
-    },
-    postColors: {
-      note: "#e8920a",
-      article: "#2ab4e8",
-      media: "#00c4ae",
-      link: "#62c278",
-      event: "#ee5566",
-    },
+    ...themeColorsFromPalette("dark"),
   },
 ];
 

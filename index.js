@@ -75,7 +75,11 @@ app.use(cors({
   credentials: true,
 }));
 
-app.use(express.json({ limit: "1mb" }));
+// Keep the exact received bytes for HTTP-signature Digest verification
+// (methods/federation/verifyHttpSignature.js); re-serializing req.body can
+// differ from what the peer actually hashed.
+const keepRawBody = (req, _res, buf) => { req.rawBody = buf; };
+app.use(express.json({ limit: "1mb", verify: keepRawBody }));
 app.use(express.urlencoded({ extended: true, limit: "1mb" }));
 app.use(cookieParser());
 app.use(nocache());
@@ -222,6 +226,16 @@ try {
   startGCWorker();
 } catch (err) {
   console.error("Failed to start GC worker:", err.message);
+}
+
+// Nightly denormalized-counter self-heal (replyCount / memberCount drift).
+try {
+  const { startRecomputeCountersWorker } = await import(
+    "#methods/maintenance/recomputeCounters.js"
+  );
+  startRecomputeCountersWorker();
+} catch (err) {
+  console.error("Failed to start counter recompute worker:", err.message);
 }
 
 export default Kowloon;

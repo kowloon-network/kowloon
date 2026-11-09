@@ -12,6 +12,19 @@ function esc(str) {
     .replace(/>/g, "&gt;");
 }
 
+// Make a JSON string safe to embed in a <script> element. JSON.stringify does
+// not escape "<", so a post title containing "</script><script>..." would
+// break out of the ld+json block (stored XSS). These characters can only
+// appear inside JSON strings, where \uXXXX escapes are equivalent.
+function escJsonForScript(json) {
+  return String(json)
+    .replace(/</g, "\\u003c")
+    .replace(/>/g, "\\u003e")
+    .replace(/&/g, "\\u0026")
+    .replace(/\u2028/g, "\\u2028")
+    .replace(/\u2029/g, "\\u2029");
+}
+
 // Returns the block of <head> meta tags (no wrapping <html>/<head>). `kowloonId`
 // / `kowloonType` are emitted as custom meta so any Kowloon client can read an
 // object's canonical ID straight off a shared URL — server-agnostic.
@@ -40,7 +53,7 @@ export function renderHeadTags({ title, description, image, url, type, siteName,
   <meta name="twitter:description" content="${d}">
   ${i ? `<meta name="twitter:image" content="${i}">` : ""}
 ${kowloonId ? `\n  <!-- Kowloon -->\n  <meta name="kowloon:id" content="${esc(kowloonId)}">\n  <meta name="kowloon:type" content="${esc(kowloonType || "")}">\n` : ""}
-  ${jsonLd ? `<script type="application/ld+json">${jsonLd}</script>` : ""}`;
+  ${jsonLd ? `<script type="application/ld+json">${escJsonForScript(jsonLd)}</script>` : ""}`;
 }
 
 export function renderShell(meta) {

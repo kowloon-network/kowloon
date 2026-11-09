@@ -53,6 +53,40 @@ function extractToken(req) {
   return req.query?.token || '';
 }
 
+// Parsed SPKI KeyObject cache, keyed by PEM (see routes/utils/route.js).
+const SPKI_CACHE_MAX = 4;
+const spkiCache = new Map();
+function getVerifyKey(pem) {
+  let key = spkiCache.get(pem);
+  if (!key) {
+    key = importSPKI(pem, 'RS256');
+    spkiCache.set(pem, key);
+    while (spkiCache.size > SPKI_CACHE_MAX) spkiCache.delete(spkiCache.keys().next().value);
+    key.catch(() => spkiCache.delete(pem));
+  }
+  return key;
+}
+
+// Short per-viewer cache of getViewerContext(): a page of media fires many
+// /files/:id requests for the same viewer in a burst, each of which used to
+// rebuild the full context (several queries). 10s TTL keeps circle/group
+// membership changes effectively live; bounded size, oldest evicted first.
+// Scoped to file access only -- not a general-purpose context cache.
+const CTX_TTL_MS = 10_000;
+const CTX_CACHE_MAX = 500;
+const ctxCache = new Map(); // viewerId -> { at, promise }
+function getCachedViewerContext(viewerId) {
+  const now = Date.now();
+  const hit = ctxCache.get(viewerId);
+  if (hit && now - hit.at < CTX_TTL_MS) return hit.promise;
+  const promise = getViewerContext(viewerId);
+  ctxCache.delete(viewerId);
+  ctxCache.set(viewerId, { at: now, promise });
+  promise.catch(() => ctxCache.delete(viewerId));
+  while (ctxCache.size > CTX_CACHE_MAX) ctxCache.delete(ctxCache.keys().next().value);
+  return promise;
+}
+
 async function resolveViewer(token) {
   if (!token) return null;
   try {
@@ -61,7 +95,7 @@ async function resolveViewer(token) {
     if (!pub) return null;
     const domain = settings?.domain || process.env.DOMAIN;
     const issuer = domain ? `https://${domain}` : undefined;
-    const key = await importSPKI(pub, 'RS256');
+    const key = await getVerifyKey(pub);
     const { payload } = await jwtVerify(token, key, issuer ? { issuer } : {});
     return payload?.user?.id || null;
   } catch {
@@ -81,7 +115,7 @@ async function canAccess(to, file, viewerId) {
   if (visibility === '@public') return true;
   if (!viewerId) return false;
   if (file.actorId === viewerId) return true;
-  const ctx = await getViewerContext(viewerId);
+  const ctx = await getCachedViewerContext(viewerId);
   if (visibility.startsWith('@')) return ctx.viewerDomain === visibility.slice(1);
   if (visibility === viewerId) return true;
   return ctx.circleIds.has(visibility) || ctx.groupIds.has(visibility);
@@ -149,8 +183,10 @@ export async function authorizeFileAccess(file, req) {
   }
 
   if (!allowed) {
-    const token = extractToken(req);
-    viewerId = await resolveViewer(token);
+    // route() (get.js) has already verified the JWT and attached req.user --
+    // reuse it instead of verifying a second time. serve.js is a bare
+    // handler, so it still falls back to verifying the token here.
+    viewerId = req.user?.id || (await resolveViewer(extractToken(req)));
     if (viewerId) identified = true;
     allowed = parentIsRemote
       ? await canAccessRemoteParent(file.parentObject, viewerId)

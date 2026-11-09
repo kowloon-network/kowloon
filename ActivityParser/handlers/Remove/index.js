@@ -143,6 +143,18 @@ export default async function Remove(activity) {
 
     let removed = (res.modifiedCount || 0) > 0;
 
+    // Kick from a Group's members circle: decrement Group.memberCount the
+    // same guarded way Leave does (only if the $pull actually removed them).
+    if (ownerType === "Group" && removed) {
+      const g = await Group.findOne({ id: ownerId }).select("circles").lean();
+      if (g?.circles?.members === activity.target) {
+        await Group.updateOne(
+          { id: ownerId, memberCount: { $gt: 0 } },
+          { $inc: { memberCount: -1 } }
+        );
+      }
+    }
+
     // If removing from a Group and not found in target circle, try pending circle
     if (ownerType === "Group" && !removed) {
       const group = await Group.findOne({ id: ownerId }).select("circles").lean();

@@ -25,6 +25,8 @@ const jsonTypes = [
 router.use(
   express.json({
     limit: JSON_LIMIT,
+    // Exact received bytes for HTTP-signature Digest verification.
+    verify: (req, _res, buf) => { req.rawBody = buf; },
     type: (req) => {
       const ct = (req.headers["content-type"] || "")
         .split(";")[0]

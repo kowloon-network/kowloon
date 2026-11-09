@@ -7,6 +7,17 @@ import { SignatureNonce } from "#schema";
 // In-memory public key cache: keyId → { pem, fetchedAt }
 const KEY_CACHE = new Map();
 const KEY_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+// keyId is attacker-chosen, so an uncapped cache is a memory-growth vector.
+// Map preserves insertion order; evict the oldest once over the cap.
+const KEY_CACHE_MAX = 500;
+
+function cacheKey(keyId, keyInfo) {
+  KEY_CACHE.delete(keyId); // re-insert so a refresh counts as "newest"
+  KEY_CACHE.set(keyId, { keyInfo, fetchedAt: Date.now() });
+  while (KEY_CACHE.size > KEY_CACHE_MAX) {
+    KEY_CACHE.delete(KEY_CACHE.keys().next().value);
+  }
+}
 
 function parseSignatureHeader(sig) {
   // e.g. keyId="...",algorithm="rsa-sha256",headers="(request-target) host date digest",signature="base64..."
@@ -61,13 +72,13 @@ async function fetchPublicKeyFromKeyId(keyId) {
       actor?.publicKeyPem;
     if (pem) {
       const keyInfo = { type: "pem", key: pem };
-      KEY_CACHE.set(keyId, { keyInfo, fetchedAt: Date.now() });
+      cacheKey(keyId, keyInfo);
       return keyInfo;
     }
     // JWKS (choose first RSA key)
     if (json?.keys?.length) {
       const keyInfo = { type: "jwks", jwks: json };
-      KEY_CACHE.set(keyId, { keyInfo, fetchedAt: Date.now() });
+      cacheKey(keyId, keyInfo);
       return keyInfo;
     }
   } catch (e) {
@@ -118,9 +129,14 @@ function verifyDigest(req) {
   const [, algo, expectedDigestB64] = match;
   const body = req.body;
 
-  // Calculate digest of actual body
+  // Calculate digest of actual body. Prefer the exact received bytes
+  // (req.rawBody, captured by the JSON parsers in index.js/routes/index.js);
+  // re-serializing the parsed object only matches when the sender used the
+  // same serialization.
   let bodyStr;
-  if (typeof body === "string") {
+  if (Buffer.isBuffer(req.rawBody)) {
+    bodyStr = req.rawBody;
+  } else if (typeof body === "string") {
     bodyStr = body;
   } else if (Buffer.isBuffer(body)) {
     bodyStr = body.toString("utf8");
@@ -153,21 +169,46 @@ export default async function verifyHttpSignature(
   if (!keyId || !signature)
     return { ok: false, error: "Invalid Signature header" };
 
-  // Required headers we expect to be signed
+  // Headers covered by the signature
   const headersList = (headers || "(request-target) host date digest")
     .split(/\s+/)
-    .filter(Boolean);
+    .filter(Boolean)
+    .map((h) => h.toLowerCase());
+
+  // SECURITY: a signature that doesn't cover the method+path, host and date
+  // can be replayed against another endpoint/host or indefinitely. Any
+  // request carrying a body must also sign (and send) a Digest, or the body
+  // is unauthenticated. signHttpRequest.js signs exactly these sets.
+  const method = String(req.method || "").toUpperCase();
+  const contentLength = Number(req.get("Content-Length") || 0);
+  const hasBody =
+    method === "POST" ||
+    method === "PUT" ||
+    method === "PATCH" ||
+    contentLength > 0 ||
+    !!req.get("Transfer-Encoding");
+  const requiredSigned = ["(request-target)", "host", "date"];
+  if (hasBody) requiredSigned.push("digest");
+  const missingSigned = requiredSigned.filter((h) => !headersList.includes(h));
+  if (missingSigned.length) {
+    return {
+      ok: false,
+      error: `Signature must cover: ${missingSigned.join(", ")}`,
+    };
+  }
 
   // Basic freshness checks
   const date = req.get("Date");
   if (!date) return { ok: false, error: "Missing Date header" };
-  const skew = Math.abs(Date.now() - Date.parse(date));
-  if (isFinite(skew) && skew > maxSkewMs)
-    return { ok: false, error: "Clock skew too large" };
+  const parsedDate = Date.parse(date);
+  if (!Number.isFinite(parsedDate))
+    return { ok: false, error: "Invalid Date header" };
+  const skew = Math.abs(Date.now() - parsedDate);
+  if (skew > maxSkewMs) return { ok: false, error: "Clock skew too large" };
 
-  // SECURITY: Verify digest if present to detect body tampering
-  const digestHeader = req.get("Digest");
-  if (digestHeader && (req.body || req.method === "POST")) {
+  // SECURITY: Digest is mandatory for any request with a body (verifyDigest
+  // returns "Missing Digest header" if absent), not only when present.
+  if (hasBody) {
     const digestResult = verifyDigest(req);
     if (!digestResult.ok) return digestResult;
   }
@@ -251,10 +292,16 @@ export default async function verifyHttpSignature(
     const keyDomain = extractDomainFromUrl(keyId);
 
     if (!actorDomain || !keyDomain) {
+      // Fail closed: if we can't tell which domain the actor and key belong
+      // to, we can't rule out cross-domain impersonation.
       logger.warn("Could not extract domains for verification", {
         actorId,
         keyId,
       });
+      return {
+        ok: false,
+        error: "Could not determine actor/key domain for signature verification",
+      };
     } else if (actorDomain !== keyDomain) {
       return {
         ok: false,

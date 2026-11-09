@@ -27,6 +27,26 @@ function safeMarkdown(content) {
     disallowedTagsMode: "discard",
   });
 }
+// PRIVACY: rewrite external <img> in rendered HTML to locally stored copies
+// (or plain links) so readers' browsers never hit third-party hosts. See
+// methods/files/proxyBodyImages.js. Dynamic import avoids a schema <-> methods
+// import cycle. Bodies stored before this existed keep their original src
+// until re-rendered (scripts/rerender-bodies.js).
+async function proxyImages(html, actorId, parentObject) {
+  if (!html || !/<img\b/i.test(html)) return html;
+  try {
+    const { default: proxyBodyImages } = await import("#methods/files/proxyBodyImages.js");
+    return await proxyBodyImages(html, {
+      domain: getServerSettings().domain,
+      actorId,
+      parentObject,
+    });
+  } catch (err) {
+    console.error("proxyImages failed:", err.message);
+    return html;
+  }
+}
+
 const Schema = mongoose.Schema;
 const ObjectId = mongoose.Types.ObjectId;
 
@@ -82,6 +102,9 @@ ReplySchema.pre("save", async function (next) {
   this.body = safeMarkdown(linkifyMentions(this.source.content));
 
   if (!this.parent) this.parent = this.target;
+  // Images are owned by the root target: Reply.to is always "" (inherits),
+  // so the root's `to` is what must gate access to them.
+  this.body = await proxyImages(this.body, this.actorId, this.target);
   // let stringject = Buffer.from(this.id);
   // const sign = crypto.createSign("RSA-SHA256");
   // sign.update(stringject);
@@ -100,7 +123,11 @@ ReplySchema.pre("findOneAndUpdate", async function (next) {
       ...(current?.source || {}),
       ...update.$set.source,
     };
-    update.$set.body = safeMarkdown(linkifyMentions(newSource.content));
+    update.$set.body = await proxyImages(
+      safeMarkdown(linkifyMentions(newSource.content)),
+      current?.actorId,
+      current?.target
+    );
   }
   next();
 });

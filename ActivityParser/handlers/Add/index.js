@@ -202,24 +202,28 @@ export default async function Add(activity) {
 
     if (resolved.length === 0) return { activity, error: "Add: no valid members resolved" };
 
-    // Deduplicate against members already in the circle
-    const existing = await Circle.findOne({ id: activity.target }).select("members.id").lean();
-    const existingIds = new Set((existing?.members || []).map((m) => m.id));
-    const toAdd = resolved.filter((m) => !existingIds.has(m.id));
+    // Dedupe the submitted list itself (the same id twice in one Add used to
+    // be pushed twice), then push each member with a per-id $ne guard so a
+    // concurrent Add can't double-insert between a read and the $push.
+    const seenIds = new Set();
+    const uniqueResolved = resolved.filter((m) => {
+      if (!m?.id || seenIds.has(m.id)) return false;
+      seenIds.add(m.id);
+      return true;
+    });
 
     // Normalize activity.object for downstream code
     activity.object = resolved.length === 1 ? resolved[0] : resolved;
 
-    let res = { modifiedCount: 0 };
-    if (toAdd.length > 0) {
-      res = await Circle.updateOne(
-        { id: activity.target },
-        {
-          $push: { members: { $each: toAdd } },
-          $inc: { memberCount: toAdd.length },
-        }
+    const toAdd = [];
+    for (const m of uniqueResolved) {
+      const r = await Circle.updateOne(
+        { id: activity.target, "members.id": { $ne: m.id } },
+        { $push: { members: m }, $inc: { memberCount: 1 } }
       );
+      if ((r.modifiedCount || 0) > 0) toAdd.push(m);
     }
+    const res = { modifiedCount: toAdd.length };
 
     // Playlist-style icon inheritance: a user-created circle that still shows
     // the generic default icon adopts the first added member's icon (person or
@@ -250,6 +254,15 @@ export default async function Add(activity) {
     // remove from pending, and notify — one member at a time.
     if (ownerType === "Group" && res.modifiedCount > 0) {
       const group = await Group.findOne({ id: ownerId }).lean();
+
+      // Admin-approved Add into the members circle: keep Group.memberCount in
+      // step, as Join does (toAdd only holds members actually inserted).
+      if (group?.circles?.members === activity.target) {
+        await Group.updateOne(
+          { id: ownerId },
+          { $inc: { memberCount: toAdd.length } }
+        );
+      }
 
       for (const member of toAdd) {
         // Add group to user's Groups circle

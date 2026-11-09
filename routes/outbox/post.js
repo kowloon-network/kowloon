@@ -6,6 +6,8 @@ import createActivity from "#methods/activities/create.js"; // fallback creator
 import proxyOutbox from "#methods/oauth/proxyOutbox.js";
 import { isDomainBlockedByUser } from "#methods/oauth/tokens.js";
 import isServerAdmin from "#methods/auth/isServerAdmin.js";
+import logger from "#methods/utils/logger.js";
+import { reportError } from "#methods/utils/errorReporting.js";
 
 const isObj = (v) => v && typeof v === "object" && !Array.isArray(v);
 const isNonEmptyStr = (s) => typeof s === "string" && s.trim().length > 0;
@@ -303,10 +305,10 @@ export default route(
           });
         }
       } catch (err) {
-        if (DEV) {
-          console.error(`${label}: federation enqueue failed`, err);
-        }
-        // Don't fail the whole request if federation fails
+        // Don't fail the whole request if federation fails -- but never fail
+        // silently: an un-enqueued activity simply never reaches peers.
+        logger.error(`${label}: federation enqueue failed for ${createdId}: ${err?.stack || err}`);
+        reportError(err, { where: "outbox federation enqueue", activityId: createdId, type: activity?.type });
       }
     }
 

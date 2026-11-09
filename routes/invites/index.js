@@ -80,57 +80,9 @@ router.get("/:code", async (req, res) => {
   }
 });
 
-/**
- * POST /invites/:code/redeem
- * Redeem an invite code
- * Called during user registration after account is created
- *
- * Body:
- * - userId: The newly created user's ID (required)
- * - email: The user's email (required for individual invites)
- */
-router.post("/:code/redeem", async (req, res) => {
-  try {
-    const { code } = req.params;
-    const { userId, email } = req.body;
-
-    if (!userId) {
-      return res.status(400).json({ error: "userId is required" });
-    }
-
-    const invite = await Invite.findOne({
-      code,
-      active: true,
-      deletedAt: null,
-    });
-
-    if (!invite) {
-      return res.status(404).json({ error: "Invite not found" });
-    }
-
-    // Check if this user already redeemed this invite (for open invites)
-    if (invite.type === "open") {
-      const alreadyRedeemed = invite.redemptions.some((r) => r.userId === userId);
-      if (alreadyRedeemed) {
-        return res.status(409).json({ error: "You have already used this invite" });
-      }
-    }
-
-    // Attempt redemption
-    try {
-      await invite.redeem(userId, email);
-    } catch (err) {
-      return res.status(400).json({ error: err.message });
-    }
-
-    return res.json({
-      success: true,
-      message: "Invite redeemed successfully",
-    });
-  } catch (err) {
-    console.error("Failed to redeem invite:", err);
-    return res.status(500).json({ error: "Failed to redeem invite" });
-  }
-});
+// POST /invites/:code/redeem was removed: it was unauthenticated and took any
+// userId, so anyone could burn invite slots or mark invites redeemed by
+// arbitrary users. Registration (routes/register/index.js) redeems the invite
+// itself after creating the account, and no client called this route.
 
 export default router;

@@ -19,13 +19,17 @@ const BATCH_SIZE = parseInt(process.env.FEDERATION_PULL_BATCH_SIZE || "10", 10);
  */
 function extractDomain(str) {
   if (!str) return null;
-  try {
-    const url = new URL(str);
-    return url.hostname;
-  } catch {
-    const parts = str.split("@").filter(Boolean);
-    return parts[parts.length - 1];
+  // Only treat real URLs as URLs: `new URL("group:x@d")` parses with an
+  // empty hostname, which silently dropped every remote group.
+  if (/^https?:\/\//i.test(str)) {
+    try {
+      return new URL(str).hostname;
+    } catch {
+      return null;
+    }
   }
+  const parts = str.split("@").filter(Boolean);
+  return parts[parts.length - 1];
 }
 
 // A bare-server member looks like "@kowloon.network" (one @ at start, no second @).
@@ -47,50 +51,56 @@ async function buildPullParamsForServer(remoteDomain) {
     groups: new Set(),
   };
 
-  // Get all local users
-  const localUsers = await User.find({
-    id: new RegExp(`@${ourDomain}$`, "i"),
+  // Only local users who actually have a member on this remote domain in one
+  // of their circles go in `to`. Previously EVERY local user was sent as a
+  // repeated `to=` query param (HTTP 431 at ~500 users), and each user cost
+  // two Circle lookups. Same approach as pollWorker's follower map: one query
+  // for circles containing members on that domain. Bare "@domain" server
+  // entries are handled by processCircleServerPulls, so they're excluded here.
+  const esc = remoteDomain.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const circles = await Circle.find({
+    "members.id": { $regex: `.@${esc}$`, $options: "i" },
+    deletedAt: null,
+  })
+    .select("id actorId members.id")
+    .lean();
+
+  const ownerIds = [
+    ...new Set(
+      circles
+        .map((c) => c.actorId)
+        .filter((id) => typeof id === "string" && extractDomain(id) === ourDomain)
+    ),
+  ];
+  if (ownerIds.length === 0) {
+    return { authors: [], members: [], groups: [] };
+  }
+
+  const owners = await User.find({
+    id: { $in: ownerIds },
     deletedAt: null,
     active: { $ne: false },
   })
-    .select("id circles")
+    .select("id circles.blocked circles.muted")
     .lean();
+  const activeOwners = new Set(owners.map((u) => u.id));
+  // Blocked/Muted circles hold remote users too -- they are not follows.
+  const excludedCircles = new Set(
+    owners.flatMap((u) => [u.circles?.blocked, u.circles?.muted]).filter(Boolean)
+  );
 
-  for (const user of localUsers) {
-    // Add user as member (for Circle-addressed content)
-    aggregated.members.add(user.id);
-
-    // Get users they follow from remote server
-    if (user.circles?.following) {
-      const followingCircle = await Circle.findOne({ id: user.circles.following })
-        .select("members")
-        .lean();
-
-      if (followingCircle?.members) {
-        for (const member of followingCircle.members) {
-          const memberDomain = extractDomain(member.id);
-          if (memberDomain === remoteDomain) {
-            aggregated.authors.add(member.id);
-          }
-        }
-      }
+  for (const circle of circles) {
+    if (!activeOwners.has(circle.actorId) || excludedCircles.has(circle.id)) continue;
+    let interested = false;
+    for (const member of circle.members || []) {
+      const id = member?.id;
+      if (typeof id !== "string" || isServerEntry(id)) continue;
+      if (extractDomain(id) !== remoteDomain) continue;
+      if (id.startsWith("group:")) aggregated.groups.add(id);
+      else aggregated.authors.add(id);
+      interested = true;
     }
-
-    // Get groups they're in on remote server
-    if (user.circles?.groups) {
-      const groupsCircle = await Circle.findOne({ id: user.circles.groups })
-        .select("members")
-        .lean();
-
-      if (groupsCircle?.members) {
-        for (const member of groupsCircle.members) {
-          if (member.id?.startsWith("group:") && extractDomain(member.id) === remoteDomain) {
-            aggregated.groups.add(member.id);
-          }
-        }
-      }
-    }
-
+    if (interested) aggregated.members.add(circle.actorId);
   }
 
   return {
@@ -157,7 +167,12 @@ async function processCircleServerPulls() {
         remoteDomain: domain,
         from: [`@${domain}`],
         to: [...userIds],
-        since: serverRecord?.lastPulledAt ?? new Date(Date.now() - 30 * 24 * 60 * 60 * 1000),
+        // serverPullCursor = newest publishedAt received last time. Fallback
+        // to lastPulledAt for records written before the cursor existed.
+        since:
+          serverRecord?.serverPullCursor ??
+          serverRecord?.lastPulledAt ??
+          new Date(Date.now() - 30 * 24 * 60 * 60 * 1000),
         limit: 100,
       });
       const responseTimeMs = Date.now() - startTime;
@@ -173,6 +188,7 @@ async function processCircleServerPulls() {
               pullErrorCount: 0,
               status: "active",
               nextPullAt: new Date(now.getTime() + POLL_INTERVAL_MS),
+              ...(result.newestPublishedAt ? { serverPullCursor: result.newestPublishedAt } : {}),
             },
             $setOnInsert: { domain },
           },
@@ -251,7 +267,7 @@ async function processBatch() {
         remoteDomain,
         from: [...params.authors, ...params.groups],
         to: params.members,
-        since: server.lastPulledAt,
+        since: server.pullCursor ?? server.lastPulledAt,
         limit: 100,
       });
       const responseTimeMs = Date.now() - startTime;
@@ -261,7 +277,7 @@ async function processBatch() {
 
       // Update server using FederatedServer methods
       if (!result.error) {
-        await FederatedServer.recordPullSuccess(remoteDomain, itemCount, responseTimeMs);
+        await FederatedServer.recordPullSuccess(remoteDomain, itemCount, responseTimeMs, result.newestPublishedAt);
       } else {
         await FederatedServer.recordPullError(remoteDomain, result.error);
       }

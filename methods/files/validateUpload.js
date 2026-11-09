@@ -4,6 +4,7 @@
 import { fileTypeFromBuffer } from 'file-type';
 import sanitizeHtml from '#methods/utils/sanitize.js';
 import sharp from 'sharp';
+import { open, readFile } from 'fs/promises';
 
 // ── Allowlist ─────────────────────────────────────────────────────────────────
 
@@ -222,4 +223,37 @@ export async function validateUpload(buffer, claimedMimeType) {
   // Audio and video are passed through — no safe re-encoding available without ffmpeg
 
   return { buffer: safeBuffer, mimeType };
+}
+
+// Bytes read from the head of a file for magic-byte detection (file-type
+// needs ~4100; SVG sniffing uses 4096).
+const HEAD_BYTES = 64 * 1024;
+
+/**
+ * Validate an upload that multer wrote to disk.
+ * Audio/video (passed through unmodified anyway) are verified from the file
+ * head only and returned as { mimeType, buffer: null } so the caller can
+ * stream them from disk. Images/SVG still need the full bytes for sanitizing
+ * or re-encoding, so they're read and run through validateUpload().
+ * Throws on rejection, like validateUpload().
+ */
+export async function validateUploadFile(path, claimedMimeType) {
+  const fh = await open(path, 'r');
+  let head;
+  try {
+    const buf = Buffer.alloc(HEAD_BYTES);
+    const { bytesRead } = await fh.read(buf, 0, HEAD_BYTES, 0);
+    head = buf.subarray(0, bytesRead);
+  } finally {
+    await fh.close();
+  }
+
+  const sniffed = await detectMimeType(head, claimedMimeType);
+  if (!sniffed || !ALLOWED_MIME_TYPES.has(sniffed)) {
+    throw new Error(`File type not allowed: ${sniffed ?? claimedMimeType}`);
+  }
+  if (sniffed.startsWith('audio/') || sniffed.startsWith('video/')) {
+    return { buffer: null, mimeType: sniffed };
+  }
+  return validateUpload(await readFile(path), claimedMimeType);
 }

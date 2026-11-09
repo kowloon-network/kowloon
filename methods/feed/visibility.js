@@ -70,16 +70,11 @@ export async function isGroupVisibleTo(groupId, viewerId) {
  * Check if viewer can see a FeedItems item
  * @param {Object} feedCacheItem - FeedItems document
  * @param {string|null} viewerId - Viewer's ID (null = anonymous)
- * @param {Object} context - Pre-loaded context { followerMap, membershipMap, grants }
+ * @param {Object} [context] - Unused; kept for call-site compatibility
  * @returns {Promise<boolean>}
  */
-export async function canView(feedCacheItem, viewerId, context = {}) {
-  const { to, origin } = feedCacheItem;
-  const {
-    followerMap = new Map(),
-    membershipMap = new Map(),
-    grants = {},
-  } = context;
+export async function canView(feedCacheItem, viewerId, context = {}) { // eslint-disable-line no-unused-vars -- context kept for callers
+  const { to } = feedCacheItem;
 
   // "public" → everyone can see
   if (to === "public" || to === "@public") {
@@ -116,65 +111,10 @@ export async function canView(feedCacheItem, viewerId, context = {}) {
   return false;
 }
 
-/**
- * Build follower map: actorId -> Set of follower IDs
- * @param {string[]} actorIds - Actor IDs to check
- * @returns {Promise<Map<string, Set<string>>>}
- */
-export async function buildFollowerMap(actorIds = []) {
-  if (actorIds.length === 0) return new Map();
-
-  const { User } = await import("#schema");
-
-  const users = await User.find({ deletedAt: null, active: { $ne: false } })
-    .select("id following")
-    .lean();
-
-  if (users.length === 0) return new Map();
-
-  // Get all unique following circle IDs
-  const followingCircleIds = users.map((u) => u.following).filter(Boolean);
-  if (followingCircleIds.length === 0) return new Map();
-
-  // Batch fetch all following circles
-  const followingCircles = await Circle.find({
-    id: { $in: followingCircleIds },
-  }).lean();
-
-  // Build map: circleId -> member IDs
-  const circleMembers = new Map();
-  for (const circle of followingCircles) {
-    const memberIds = (circle.members || []).map((m) => m.id).filter(Boolean);
-    circleMembers.set(circle.id, memberIds);
-  }
-
-  // Build reverse map: actorId -> Set of followers
-  const followerMap = new Map();
-  for (const user of users) {
-    if (!user.following) continue;
-    const following = circleMembers.get(user.following) || [];
-    for (const followedId of following) {
-      if (!followerMap.has(followedId)) {
-        followerMap.set(followedId, new Set());
-      }
-      followerMap.get(followedId).add(user.id);
-    }
-  }
-
-  return followerMap;
-}
-
-/**
- * Check if viewer follows author
- * @param {string} viewerId - The viewer
- * @param {string} authorId - The author
- * @param {Map<string, Set<string>>} followerMap - Pre-built follower map
- * @returns {boolean}
- */
-export function follows(viewerId, authorId, followerMap) {
-  const followers = followerMap.get(authorId);
-  return followers ? followers.has(viewerId) : false;
-}
+// buildFollowerMap()/follows() and the "followers" capability were removed
+// (2026-11-09): it scanned every User per call, read a nonexistent
+// `u.following` field (always an empty Map), and nothing ever produces a
+// "followers" capability -- Kowloon has no follow graph (circles replace it).
 
 /**
  * Build membership map for circles/groups
@@ -228,12 +168,11 @@ export function inLocalAudience(viewerId, addressedIds, membershipMap) {
  * @param {Object} opts
  * @param {string} opts.viewerId - The viewer
  * @param {string} opts.authorId - The author
- * @param {string} opts.capability - Capability value ("public"|"followers"|"audience"|"none")
+ * @param {string} opts.capability - Capability value ("public"|"audience"|"none")
  * @param {string} opts.origin - Origin ("local"|"remote")
  * @param {string} opts.feedItemId - FeedItems.id (used for local audience check via FeedFanOut)
  * @param {string[]} opts.addressedIds - LOCAL addressed IDs (for local content)
  * @param {Object} opts.grants - Remote grants object (for remote content)
- * @param {Map} opts.followerMap - Pre-built follower map
  * @param {Map} opts.membershipMap - Pre-built membership map
  * @returns {Promise<boolean>}
  */
@@ -245,7 +184,6 @@ export async function evaluateCapability({
   feedItemId,
   addressedIds = [],
   grants = {},
-  followerMap,
   membershipMap,
 }) {
   if (!capability || typeof capability !== "string") return false;
@@ -260,11 +198,6 @@ export async function evaluateCapability({
 
   // "public" → true for any authenticated user
   if (cap === "public" || cap === "@public") return true;
-
-  // "followers" → check if viewer follows author
-  if (cap === "followers") {
-    return follows(viewerId, authorId, followerMap);
-  }
 
   // "audience" → FeedFanOut is authoritative for both local and remote posts.
   // For local posts, try membership map first (avoids a DB query when addressedIds are available).
@@ -282,12 +215,11 @@ export async function evaluateCapability({
  * Enrich FeedItems item with per-viewer capabilities
  * @param {Object} feedCacheItem - FeedItems document
  * @param {string|null} viewerId - Viewer's ID (null = anonymous)
- * @param {Object} context - Pre-loaded context { followerMap, membershipMap, grants, addressedIds }
+ * @param {Object} context - Pre-loaded context { membershipMap, grants, addressedIds }
  * @returns {Promise<Object>} - Item with canReply/canReact booleans
  */
 export async function enrichWithCapabilities(feedCacheItem, viewerId, context = {}) {
   const {
-    followerMap = new Map(),
     membershipMap = new Map(),
     grants = {},
     addressedIds = [],
@@ -304,7 +236,6 @@ export async function enrichWithCapabilities(feedCacheItem, viewerId, context = 
       feedItemId,
       addressedIds,
       grants,
-      followerMap,
       membershipMap,
     }),
     evaluateCapability({
@@ -315,7 +246,6 @@ export async function enrichWithCapabilities(feedCacheItem, viewerId, context = 
       feedItemId,
       addressedIds,
       grants,
-      followerMap,
       membershipMap,
     }),
   ]);
@@ -410,8 +340,7 @@ export async function authorizeInteraction({ actorId, targetId, capability }) {
 
   if (!feedCacheItem) return deny(404, "Not found", "not_found");
 
-  const followerMap = await buildFollowerMap([feedCacheItem.actorId]);
-  const visible = await canView(feedCacheItem, actorId, { followerMap });
+  const visible = await canView(feedCacheItem, actorId);
   if (!visible) return deny(404, "Not found", "not_visible");
 
   // Block: the target's author has blocked this actor — individually, or by
@@ -509,9 +438,7 @@ export function buildVisibilityFilter(viewerId) {
 
 export default {
   canView,
-  buildFollowerMap,
   buildMembershipMap,
-  follows,
   inLocalAudience,
   evaluateCapability,
   enrichWithCapabilities,

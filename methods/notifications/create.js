@@ -19,6 +19,7 @@ import sendPush from "#methods/push/send.js";
  * @param {string} [params.summary] - Custom summary text (auto-generated if not provided)
  * @param {string} [params.href] - Custom href (auto-generated if not provided)
  * @param {string} [params.groupKey] - Key for aggregating notifications
+ * @param {Object|null} [params.actor] - Pre-fetched actor ({ id, profile }); skips the lookup
  * @param {number} [params.cooldownMs] - When set with groupKey, makes this a
  *   "schedulable" notification: it fires only if the most recent one with this
  *   (recipient, groupKey) has been READ *and* is older than cooldownMs. Lets a
@@ -47,8 +48,13 @@ export default async function createNotification(params) {
       return null;
     }
 
-    // Fetch actor info for display
-    const actor = await User.findOne({ id: actorId }).select("id profile").lean();
+    // Fetch actor info for display. Callers fanning one actor out to many
+    // recipients pass `actor` (an { id, profile } lean doc) to skip a
+    // re-fetch per recipient.
+    const actor =
+      params.actor !== undefined
+        ? params.actor
+        : await User.findOne({ id: actorId }).select("id profile").lean();
     const actorName = actor?.profile?.name || actorId;
     const actorIcon = actor?.profile?.icon;
 
@@ -144,6 +150,9 @@ export default async function createNotification(params) {
         objectType: objectType || null,
         objectId: navObjectId || null,
         href,
+        // Which signed-in account this is for, so a multi-account app can
+        // switch to it before opening the notification.
+        recipientId,
       },
     }).catch(() => {});
 

@@ -3,6 +3,9 @@
 
 import express from 'express';
 import multer from 'multer';
+import os from 'os';
+import { randomUUID } from 'crypto';
+import { unlink } from 'fs/promises';
 import upload from './upload.js';
 import list from './list.js';
 import get from './get.js';
@@ -27,12 +30,35 @@ async function getMaxUploadBytes() {
 // Dynamic multer middleware: re-checks limit per request so admin changes take effect.
 // On LIMIT_FILE_SIZE we attach the error to req so the route handler can return a
 // clean 413 instead of crashing with an unhandled MulterError.
+//
+// Uploads go to a temp file on disk (not memoryStorage) so a burst of large
+// uploads can't hold N x maxUploadSize in RAM. The temp file is always removed
+// when the response ends -- whatever path the request took (handler success,
+// validation error, auth rejection in route(), client abort).
+const diskStorage = multer.diskStorage({
+  destination: os.tmpdir(),
+  filename: (_req, _file, cb) => cb(null, `kowloon-upload-${randomUUID()}`),
+});
+
+function cleanupTempUpload(req, res) {
+  let done = false;
+  const cleanup = () => {
+    if (done) return;
+    done = true;
+    const p = req.file?.path;
+    if (p) unlink(p).catch(() => {});
+  };
+  res.once('finish', cleanup);
+  res.once('close', cleanup);
+}
+
 function dynamicUpload(req, res, next) {
   getMaxUploadBytes().then((limit) => {
     const mw = multer({
-      storage: multer.memoryStorage(),
+      storage: diskStorage,
       limits: { fileSize: limit },
     }).single('file');
+    cleanupTempUpload(req, res);
     mw(req, res, (err) => {
       if (err && err.code === 'LIMIT_FILE_SIZE') {
         req.multerError = err;

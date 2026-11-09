@@ -22,7 +22,11 @@ const handler = route(
 
     if (!email) return;
 
-    const user = await User.findOne({ email: new RegExp(`^${email}$`, "i"), active: true })
+    // Exact, case-insensitive match via collation -- never build a RegExp from
+    // user input ("." / "*" etc. would match other addresses, and patterns
+    // like (a+)+ are a ReDoS vector).
+    const user = await User.findOne({ email, active: true })
+      .collation({ locale: "en", strength: 2 })
       .select("+passwordResetToken +passwordResetExpires")
       .lean(false);
 

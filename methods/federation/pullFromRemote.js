@@ -36,6 +36,9 @@ function dedupeHash(feedItemId, to) {
   return crypto.createHash("sha256").update(`${feedItemId}:${to}`).digest("hex");
 }
 
+// Cap on pages fetched per pull cycle (x limit items each).
+const MAX_PAGES_PER_PULL = 10;
+
 function isServerEntry(id) {
   return typeof id === "string" && id.startsWith("@") && !id.slice(1).includes("@");
 }
@@ -51,9 +54,12 @@ function isServerEntry(id) {
  *                                           For server follows: ALL local subscribers.
  *                                           For user follows: users the remote should filter for.
  * @param {string|Date} [options.since]    - Only items after this timestamp
- * @param {number}   [options.limit=100]   - Max items to retrieve
+ * @param {number}   [options.limit=100]   - Page size requested from the remote
+ * @param {number}   [options.maxPages=10] - Max pages fetched per call
  *
- * @returns {Promise<{ items: Array, nextCursor: string|null, error: string|null }>}
+ * @returns {Promise<{ items: Array, nextCursor: null, newestPublishedAt: Date|null,
+ *                     truncated: boolean, error: string|null }>}
+ *   newestPublishedAt = cursor callers should store as the next `since`.
  */
 export default async function pullFromRemote({
   remoteDomain,
@@ -61,7 +67,70 @@ export default async function pullFromRemote({
   to = [],
   since = null,
   limit = 100,
+  maxPages = MAX_PAGES_PER_PULL,
 } = {}) {
+  // The remote returns the NEWEST `limit` items since `since`, plus `next`
+  // (publishedAt of the oldest item returned). Previously only that first
+  // page was read and callers advanced `since` to "now", so anything beyond
+  // `limit` in the window was lost forever. Now: page backwards with
+  // `before=next` until a short page (or maxPages), and report the newest
+  // publishedAt actually received so callers can use it as the next `since`.
+  const allItems = [];
+  const seenIds = new Set();
+  let newestPublishedAt = null;
+  let before = null;
+  let truncated = false;
+
+  for (let page = 0; page < maxPages; page++) {
+    const res = await pullPage({ remoteDomain, from, to, since, limit, before });
+    if (res.error) {
+      // Nothing usable yet -> surface the error. A later-page failure keeps
+      // what we already stored, but we don't claim progress past it.
+      if (page === 0) return { ...res, newestPublishedAt: null, truncated: false };
+      logger.warn("pullFromRemote: later page failed; keeping earlier pages", {
+        remoteDomain,
+        page,
+        error: res.error,
+      });
+      truncated = true;
+      break;
+    }
+
+    let fresh = 0;
+    for (const it of res.items) {
+      if (seenIds.has(it.id)) continue;
+      seenIds.add(it.id);
+      allItems.push(it);
+      fresh++;
+      const t = it.publishedAt ? new Date(it.publishedAt) : null;
+      if (t && !isNaN(t) && (!newestPublishedAt || t > newestPublishedAt)) newestPublishedAt = t;
+    }
+
+    // Short page -> done. No cursor, cursor didn't move, or no new ids
+    // (an older peer that ignores `before` keeps returning page one) -> stop.
+    if (res.rawCount < limit || !res.nextCursor || res.nextCursor === before || fresh === 0) break;
+    before = res.nextCursor;
+    if (page === maxPages - 1) truncated = true;
+  }
+
+  if (truncated) {
+    logger.warn("pullFromRemote: page cap reached; older items in window skipped", {
+      remoteDomain,
+      maxPages,
+      items: allItems.length,
+    });
+  }
+
+  return {
+    items: allItems,
+    nextCursor: null,
+    newestPublishedAt,
+    truncated,
+    error: null,
+  };
+}
+
+async function pullPage({ remoteDomain, from = [], to = [], since = null, limit = 100, before = null } = {}) {
   if (!remoteDomain) {
     return { items: [], nextCursor: null, error: "remoteDomain is required" };
   }
@@ -88,6 +157,7 @@ export default async function pullFromRemote({
       params.append("since", sinceDate.toISOString());
     }
     params.append("limit", String(limit));
+    if (before) params.append("before", String(before));
 
     const url = `https://${remoteDomain}/outbox?${params}`;
 
@@ -266,7 +336,7 @@ export default async function pullFromRemote({
     }
 
     if (upsertedIds.size === 0) {
-      return { items, nextCursor, error: null };
+      return { items, rawCount: rawItems.length, nextCursor, error: null };
     }
 
     // Load FeedItem metadata needed for FanOut rows
@@ -340,11 +410,47 @@ export default async function pullFromRemote({
       // User follows: the remote computed exact recipients per item (it knows
       // its own circle memberships for circle-addressed posts, and which `to`
       // users follow each author for public posts).
+      //
+      // Exception: for PUBLIC items the remote cannot know which of our `to`
+      // users follow which author (the follow lives in OUR circles), so it
+      // lists every `to` user. Restrict those to local users who actually
+      // have the author (or the item's group) in one of their circles --
+      // otherwise everyone in `to` gets FanOut rows + "new posts" nudges for
+      // authors they never followed. Circle-addressed items keep the remote's
+      // list: the author addressed those users explicitly.
+      const publicKeys = new Set();
+      for (const fi of feedItemMap.values()) {
+        if (fi.to !== "public") continue;
+        if (fi.actorId) publicKeys.add(fi.actorId);
+        if (typeof fi.group === "string") publicKeys.add(fi.group);
+      }
+      const localFollowers = new Map(); // author/group id -> Set(local user id)
+      if (publicKeys.size) {
+        const followCircles = await Circle.find({
+          actorId: { $in: to },
+          "members.id": { $in: [...publicKeys] },
+        })
+          .select("actorId members.id")
+          .lean();
+        for (const c of followCircles) {
+          for (const m of c.members || []) {
+            if (!publicKeys.has(m?.id)) continue;
+            if (!localFollowers.has(m.id)) localFollowers.set(m.id, new Set());
+            localFollowers.get(m.id).add(c.actorId);
+          }
+        }
+      }
+      const followsItem = (feedItem, userId) =>
+        localFollowers.get(feedItem.actorId)?.has(userId) ||
+        (typeof feedItem.group === "string" && localFollowers.get(feedItem.group)?.has(userId));
+
       for (const { itemId, to: recipientIds } of recipients) {
         if (!upsertedIds.has(itemId)) continue;
         const feedItem = feedItemMap.get(itemId);
         if (!feedItem) continue;
+        const isPublic = feedItem.to === "public";
         for (const userId of recipientIds) {
+          if (isPublic && !followsItem(feedItem, userId)) continue;
           pushFanOut(itemId, feedItem, userId);
         }
       }
@@ -384,7 +490,7 @@ export default async function pullFromRemote({
       serverOnlyPull,
     });
 
-    return { items, nextCursor, error: null };
+    return { items, rawCount: rawItems.length, nextCursor, error: null };
   } catch (error) {
     logger.error("pullFromRemote: Error", {
       remoteDomain,

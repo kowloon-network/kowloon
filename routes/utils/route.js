@@ -110,6 +110,22 @@ async function isVisitingSessionValid(u, localDomain) {
   }
 }
 
+// importSPKI re-parsed the PEM on every authenticated request. Cache the
+// KeyObject by PEM string; tiny bound (normally 1 entry, a few during a key
+// rotation).
+const SPKI_CACHE_MAX = 4;
+const spkiCache = new Map();
+async function getVerifyKey(pem) {
+  let key = spkiCache.get(pem);
+  if (!key) {
+    key = importSPKI(pem, "RS256");
+    spkiCache.set(pem, key);
+    while (spkiCache.size > SPKI_CACHE_MAX) spkiCache.delete(spkiCache.keys().next().value);
+    key.catch(() => spkiCache.delete(pem)); // don't cache a bad PEM's failure
+  }
+  return key;
+}
+
 async function attachUserFromToken(req) {
   if (req.user && req.user.id) return true;
   const token = extractToken(req);
@@ -126,7 +142,7 @@ async function attachUserFromToken(req) {
     const issuer = issuerDomain ? `https://${issuerDomain}` : undefined;
 
     if (!pub) throw new Error("Missing public key for JWT verification");
-    const publicKey = await importSPKI(pub, "RS256");
+    const publicKey = await getVerifyKey(pub);
     const { payload } = await jwtVerify(token, publicKey, {
       algorithms: ["RS256"],
       ...(issuer ? { issuer } : {}),

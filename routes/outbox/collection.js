@@ -11,7 +11,6 @@
 
 import route from "../utils/route.js";
 import { Activity, Circle, FeedItems, Post } from "#schema";
-import { activityStreamsCollection } from "../utils/oc.js";
 import { getSetting } from "#methods/settings/cache.js";
 import verifyHttpSignature from "#methods/federation/verifyHttpSignature.js";
 
@@ -69,7 +68,16 @@ export default route(
       }
       const sinceRaw = typeof query.since === "string" ? new Date(query.since) : null;
       const since = sinceRaw && !isNaN(sinceRaw) ? sinceRaw : null;
-      const sinceFilter = since ? { publishedAt: { $gte: since } } : {};
+      // `before` (publishedAt of the oldest item on the previous page, i.e.
+      // our `next`) lets the puller page backwards through a window larger
+      // than `limit`. $lte, not $lt: items sharing the boundary timestamp
+      // aren't skipped; the puller dedupes the repeated boundary item.
+      const beforeRaw = typeof query.before === "string" ? new Date(query.before) : null;
+      const before = beforeRaw && !isNaN(beforeRaw) ? beforeRaw : null;
+      const publishedRange = {};
+      if (since) publishedRange.$gte = since;
+      if (before) publishedRange.$lte = before;
+      const sinceFilter = Object.keys(publishedRange).length ? { publishedAt: publishedRange } : {};
 
       const serverFroms = froms.filter(isServerEntry);
       const userFroms = froms.filter((f) => !isServerEntry(f));
@@ -159,7 +167,11 @@ export default route(
           circleItems = await FeedItems.find({
             id: { $in: postIds },
             tombstoned: { $ne: true },
-          }).lean();
+            ...(before ? { publishedAt: { $lte: before } } : {}),
+          })
+            .sort({ publishedAt: -1 })
+            .limit(limit)
+            .lean();
         }
       }
 
@@ -190,10 +202,14 @@ export default route(
         if (members?.size > 0) addToMap(item, members);
       }
 
-      // Sort newest first
-      const sorted = [...itemMap.values()].sort(
-        (a, b) => new Date(b.item.publishedAt) - new Date(a.item.publishedAt)
-      );
+      // Sort newest first and cut to `limit`. Each sub-query above is
+      // limited separately, so the merged list can exceed `limit`; returning
+      // all of it would make `next` (oldest returned) jump past items a
+      // sub-query cut off. The true newest-`limit` of the union is always
+      // within the union of each sub-query's newest-`limit`.
+      const sorted = [...itemMap.values()]
+        .sort((a, b) => new Date(b.item.publishedAt) - new Date(a.item.publishedAt))
+        .slice(0, limit);
 
       const items = sorted.map(({ item }) => item);
       const recipients = sorted.map(({ item, recipients }) => ({
@@ -208,7 +224,8 @@ export default route(
       // gcRetentionDays are already hard-purged, so a puller absent longer than
       // that just won't hear about those deletions (acceptable edge).
       let tombstones = [];
-      if (since) {
+      // First page only -- later (`before`) pages would just repeat them.
+      if (since && !before) {
         const tombOr = [];
         if (userFroms.length) tombOr.push({ actorId: { $in: userFroms } });
         for (const s of serverFroms) {
@@ -283,37 +300,49 @@ export default route(
     // -------------------------------------------------------------------------
     // Public firehose mode (no from)
     // -------------------------------------------------------------------------
-    const page = Math.max(1, parseInt(query.page, 10) || 1);
-    const skip = (page - 1) * limit;
+    // Unauthenticated, so it must stay cheap: createdAt `before` cursor
+    // (backed by the {to,createdAt} / {"object.to",createdAt} indexes in
+    // schema/Activity.js) and no countDocuments. `page` still works but is
+    // capped -- deep skip() is the expensive part; use `next` instead.
+    const MAX_PAGE = 20;
+    const page = Math.min(MAX_PAGE, Math.max(1, parseInt(query.page, 10) || 1));
+    const beforeRaw = typeof query.before === "string" ? new Date(query.before) : null;
+    const before = beforeRaw && !isNaN(beforeRaw) ? beforeRaw : null;
+    const skip = before ? 0 : (page - 1) * limit;
 
     const filter = {
       deletedAt: null,
       $or: [{ to: "@public" }, { "object.to": "@public" }],
     };
 
+    const created = {};
     if (query.since) {
-      filter.createdAt = { $gte: new Date(query.since) };
+      const sinceDate = new Date(query.since);
+      if (!isNaN(sinceDate)) created.$gte = sinceDate;
     }
-    if (query.type) {
+    if (before) created.$lt = before;
+    if (Object.keys(created).length) filter.createdAt = created;
+    if (typeof query.type === "string") {
       filter.type = query.type;
     }
 
-    const [docs, total] = await Promise.all([
-      Activity.find(filter).sort({ createdAt: -1 }).skip(skip).limit(limit).lean(),
-      Activity.countDocuments(filter),
-    ]);
+    const docs = await Activity.find(filter)
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(limit)
+      .lean();
 
-    const collection = activityStreamsCollection({
-      id: `${base}?page=${page}`,
-      orderedItems: docs,
-      totalItems: total,
-      page,
-      itemsPerPage: limit,
-      baseUrl: base,
-    });
-
-    for (const [key, value] of Object.entries(collection)) {
-      set(key, value);
+    // totalItems is intentionally omitted (was a full countDocuments on
+    // every unauthenticated request).
+    set("@context", "https://www.w3.org/ns/activitystreams");
+    set("type", "OrderedCollectionPage");
+    set("id", before ? `${base}?before=${encodeURIComponent(before.toISOString())}` : `${base}?page=${page}`);
+    set("partOf", base);
+    set("orderedItems", docs);
+    if (docs.length === limit) {
+      const cursor = new Date(docs[docs.length - 1].createdAt).toISOString();
+      set("nextCursor", cursor);
+      set("next", `${base}?before=${encodeURIComponent(cursor)}&limit=${limit}`);
     }
   },
   { allowUnauth: true }

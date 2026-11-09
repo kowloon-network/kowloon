@@ -164,11 +164,19 @@ async function deleteOne(activity, targetId) {
       ? { deletedAt: new Date(), deletedBy: activity.actorId, active: false }
       : { deletedAt: new Date(), deletedBy: activity.actorId, type: "Tombstone" };
 
-  const wasAlreadyDeleted = !!current.deletedAt;
-
-  const deleted =
-    (await Model.findOneAndUpdate(query, { $set: tombstoneFields }, { new: true }).lean?.()) ??
-    (await Model.findOneAndUpdate(query, { $set: tombstoneFields }, { new: true }));
+  // Conditional tombstone: only the Delete that actually flips deletedAt
+  // from null wins. Two concurrent Deletes used to both read "not deleted"
+  // and both decrement counters; now only the winner sees a doc back.
+  let deleted = await Model.findOneAndUpdate(
+    { ...query, deletedAt: null },
+    { $set: tombstoneFields },
+    { new: true }
+  ).lean();
+  const wasAlreadyDeleted = !deleted;
+  if (!deleted) deleted = await Model.findOne(query).lean();
+  if (!deleted) {
+    return { id: targetId, error: `target not found` };
+  }
 
   await purgeFeedItems(deleted.id);
 
@@ -219,13 +227,29 @@ async function deleteOne(activity, targetId) {
     for (const col of parentCollections) {
       try {
         if (!col) continue;
-        const r = await col.updateOne({ id: parentId }, { $inc: { replyCount: -1 } });
+        // $gt guard: never drive the count negative (drift is healed by
+        // methods/maintenance/recomputeCounters.js).
+        const r = await col.updateOne(
+          { id: parentId, replyCount: { $gt: 0 } },
+          { $inc: { replyCount: -1 } }
+        );
         if (r?.modifiedCount > 0) break;
       } catch (e) {
         // ignore model mismatches
       }
     }
-    await FeedItems.updateOne({ id: parentId }, { $inc: { "object.replyCount": -1 } });
+    await FeedItems.updateOne(
+      { id: parentId, "object.replyCount": { $gt: 0 } },
+      { $inc: { "object.replyCount": -1 } }
+    );
+    // Second-level reply: the Reply handler also bumped the immediate parent
+    // reply's own replyCount, so undo that too.
+    if (current.parent && current.parent !== parentId) {
+      await Reply.collection.updateOne(
+        { id: current.parent, replyCount: { $gt: 0 } },
+        { $inc: { replyCount: -1 } }
+      );
+    }
   }
 
   let resultObj = deleted.toObject ? deleted.toObject() : { ...deleted };

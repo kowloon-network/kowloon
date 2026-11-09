@@ -166,6 +166,8 @@ export default class S3Adapter extends StorageAdapter {
         Key: key,
         Body: stream,
         ContentType: mimeType,
+        // Same immutable caching as upload() -- uploads route streams audio/video here.
+        CacheControl: 'private, max-age=31536000, immutable',
         ACL: isPublic ? 'public-read' : 'private',
         Metadata: {
           'original-filename': toAsciiMeta(originalFileName),
@@ -309,13 +311,16 @@ export default class S3Adapter extends StorageAdapter {
     return keys
   }
 
+  // `buffer` may also be a Readable stream (media worker streams from a temp
+  // file); a stream Body needs options.contentLength for PutObject.
   async replace(key, buffer, options = {}) {
-    const { contentType = 'application/octet-stream', isPublic = false } = options;
+    const { contentType = 'application/octet-stream', isPublic = false, contentLength } = options;
     await this.client.send(
       new PutObjectCommand({
         Bucket: this.bucket,
         Key: key,
         Body: buffer,
+        ...(contentLength != null ? { ContentLength: contentLength } : {}),
         ContentType: contentType,
         CacheControl: 'private, max-age=31536000, immutable',
         ACL: isPublic ? 'public-read' : 'private',

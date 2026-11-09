@@ -1,6 +1,7 @@
 // /methods/feed/getTimeline.js
 // Timeline assembly via FeedFanOut lookup table
 
+import mongoose from "mongoose";
 import { FeedItems, FeedFanOut, Circle, User } from "#schema";
 import logger from "#methods/utils/logger.js";
 import { getServerSettings } from "#methods/settings/schemaHelpers.js";
@@ -70,18 +71,16 @@ function oldestFetchedAt(circle, memberIds) {
 /**
  * Update lastFetchedAt for a set of remote members in a circle.
  */
-async function updateMemberFetchedAt(circleId, circle, memberIds) {
-  const now = new Date();
-  const setFields = {};
-  for (const memberId of memberIds) {
-    const idx = circle.members.findIndex((m) => m.id === memberId);
-    if (idx !== -1) {
-      setFields[`members.${idx}.lastFetchedAt`] = now;
-    }
-  }
-  if (Object.keys(setFields).length > 0) {
-    await Circle.updateOne({ id: circleId }, { $set: setFields });
-  }
+async function updateMemberFetchedAt(circleId, circle, memberIds, at = new Date()) {
+  // arrayFilters match members by id at write time. The old positional
+  // `members.<idx>` used indexes from a snapshot read before a (slow) remote
+  // pull -- if membership changed meanwhile, it stamped the wrong member.
+  if (!memberIds?.length) return;
+  await Circle.updateOne(
+    { id: circleId },
+    { $set: { "members.$[m].lastFetchedAt": at } },
+    { arrayFilters: [{ "m.id": { $in: memberIds } }] }
+  );
 }
 
 // Per-circle throttle for the background remote pull in getTimeline().
@@ -130,17 +129,12 @@ async function pullCircleRemotes({ circleId, circle, viewerId, remoteMembersByDo
         limit,
       });
 
-      // Update lastFetchedAt on success, but only if this was an incremental
-      // pull (pullSince was set) or we actually got items back. If this was a
-      // first-ever fetch (pullSince=null) and returned 0 items, don't mark it
-      // as fetched -- the remote may have had a temporary bug and we want to
-      // retry the full pull next time rather than locking into an empty window.
-      if (!result.error) {
-        const gotItems = (result.items?.length ?? 0) > 0;
-        const wasIncremental = pullSince !== null;
-        if (gotItems || wasIncremental) {
-          await updateMemberFetchedAt(circleId, circle, remoteAuthors);
-        }
+      // Advance lastFetchedAt to the newest publishedAt actually received
+      // (pullFromRemote pages through the window), not wall-clock now -- "now"
+      // skipped anything past the first page. No items -> leave it unchanged
+      // (a first-ever empty fetch retries a full pull next time).
+      if (!result.error && result.newestPublishedAt) {
+        await updateMemberFetchedAt(circleId, circle, remoteAuthors, result.newestPublishedAt);
       }
     } catch (err) {
       logger.warn("getTimeline: remote pull failed", { circleId, remoteDomain, error: err.message });
@@ -159,7 +153,7 @@ async function pullCircleRemotes({ circleId, circle, viewerId, remoteMembersByDo
  * @param {string|Date} [options.before=null] - Pagination cursor: return items older than this date
  * @param {number} [options.limit=50] - Max results
  *
- * @returns {Promise<{items: Array, nextCursor: string|null, total: number}>}
+ * @returns {Promise<{items: Array, nextCursor: string|null, total: null}>}
  */
 export default async function getTimeline({
   viewerId,
@@ -291,57 +285,99 @@ export default async function getTimeline({
     });
   }
 
-  const fanOutDocs = await FeedFanOut.find({ $or: fanOutOrConditions })
-    .select("feedItemId")
-    .lean();
+  // 7. Page through FeedFanOut newest-first (by fan-out createdAt), then load
+  //    only the FeedItems for that window. Previously this loaded the viewer's
+  //    ENTIRE FanOut history every page, $in-joined it to FeedItems and ran a
+  //    countDocuments over all of it.
+  //
+  //    Cursor: "<createdAtISO>_<fanOutObjectId>" (opaque to the web client,
+  //    which echoes nextCursor back as `before`). A plain ISO date is still
+  //    accepted (legacy / mobile, which sends its oldest item's publishedAt)
+  //    and is treated as a createdAt bound.
+  const pageSize = Math.max(1, Number(limit) || 50);
+  const batchSize = pageSize * 3;
+  const MAX_BATCHES = 5; // bound work when filters (types/kinds/tombstones) reject most rows
 
-  const feedItemIds = [...new Set(fanOutDocs.map((f) => f.feedItemId).filter(Boolean))];
-
-  if (feedItemIds.length === 0) {
-    logger.info("getTimeline: No FeedFanOut records found", { viewerId, circleId });
-    return { items: [], nextCursor: null, total: 0 };
-  }
-
-  // 7. Query FeedItems by IDs with optional filters
-  const baseQuery = {
-    id: { $in: feedItemIds },
+  const itemFilter = {
     tombstoned: { $ne: true },
     objectType: { $nin: ["Group", "Circle"] },
   };
-
-  if (types.length > 0) {
-    baseQuery.type = { $in: types };
-  }
-
+  if (types.length > 0) itemFilter.type = { $in: types };
   // ?kind=photo|video|audio|file (comma-separated) — e.g. ?types=Media&kind=photo
-  // returns only posts with a photo attachment. Same treatment as `types`
-  // above: applied to baseQuery so it flows into both pageQuery (spread below)
-  // and the count query.
-  if (kinds.length > 0) {
-    baseQuery["object.attachments.kind"] = { $in: kinds };
+  // returns only posts with a photo attachment.
+  if (kinds.length > 0) itemFilter["object.attachments.kind"] = { $in: kinds };
+
+  let cursor = parseTimelineCursor(before);
+  const picked = []; // FeedItems in FanOut order
+  const seen = new Set();
+  let lastRow = null;
+  let exhausted = false;
+
+  for (let batch = 0; batch < MAX_BATCHES && picked.length < pageSize; batch++) {
+    const query = cursor
+      ? { $and: [{ $or: fanOutOrConditions }, cursorCondition(cursor)] }
+      : { $or: fanOutOrConditions };
+    const rows = await FeedFanOut.find(query)
+      .select("_id feedItemId createdAt")
+      .sort({ createdAt: -1, _id: -1 })
+      .limit(batchSize)
+      .lean();
+    if (rows.length < batchSize) exhausted = true;
+    if (rows.length === 0) break;
+
+    const ids = [...new Set(rows.map((r) => r.feedItemId).filter((id) => id && !seen.has(id)))];
+    const docs = ids.length
+      ? await FeedItems.find({ id: { $in: ids }, ...itemFilter }).lean()
+      : [];
+    const byId = new Map(docs.map((d) => [d.id, d]));
+
+    for (const row of rows) {
+      lastRow = row;
+      const doc = byId.get(row.feedItemId);
+      if (doc && !seen.has(doc.id)) {
+        seen.add(doc.id);
+        picked.push(doc);
+        if (picked.length >= pageSize) break;
+      }
+    }
+    cursor = { createdAt: lastRow.createdAt, oid: lastRow._id };
+    if (exhausted) break;
   }
 
-  // Pagination: items older than `before` cursor (newest-first feed, scroll backward in time)
-  const pageQuery = { ...baseQuery };
-  if (before) {
-    const beforeDate = before instanceof Date ? before : new Date(before);
-    pageQuery.publishedAt = { $lt: beforeDate };
-  }
-
-  const [items, total] = await Promise.all([
-    FeedItems.find(pageQuery)
-      .sort({ publishedAt: -1 })
-      .limit(Number(limit))
-      .lean(),
-    FeedItems.countDocuments(baseQuery),
-  ]);
-
-  logger.info("getTimeline: Retrieved items", { viewerId, circleId, count: items.length, total });
-
-  // nextCursor is null when we got fewer items than the limit (end of feed reached)
-  const nextCursor = items.length === Number(limit)
-    ? new Date(items[items.length - 1].publishedAt).toISOString()
+  // Stopped mid-batch because the page filled -> there is more. Stopped
+  // because FanOut ran out -> end of feed. Hit MAX_BATCHES -> more may exist.
+  const reachedEnd = exhausted && (picked.length < pageSize || lastRow === null);
+  const nextCursor = !reachedEnd && lastRow
+    ? `${new Date(lastRow.createdAt).toISOString()}_${lastRow._id}`
     : null;
 
-  return { items, nextCursor, total };
+  // Display order within the page is by publish time.
+  const items = picked.sort((a, b) => new Date(b.publishedAt) - new Date(a.publishedAt));
+
+  logger.info("getTimeline: Retrieved items", { viewerId, circleId, count: items.length });
+
+  // `total` is no longer computed (was a full countDocuments per page);
+  // callers get null.
+  return { items, nextCursor, total: null };
+}
+
+function parseTimelineCursor(before) {
+  if (!before) return null;
+  if (before instanceof Date) return isNaN(before) ? null : { createdAt: before, oid: null };
+  const s = String(before);
+  const m = s.match(/^(.+)_([0-9a-f]{24})$/i);
+  const d = new Date(m ? m[1] : s);
+  if (isNaN(d)) return null;
+  return { createdAt: d, oid: m ? new mongoose.Types.ObjectId(m[2]) : null };
+}
+
+function cursorCondition({ createdAt, oid }) {
+  if (!oid) return { createdAt: { $lt: createdAt } };
+  // Tie-break on _id: bulk fan-out writes many rows in the same millisecond.
+  return {
+    $or: [
+      { createdAt: { $lt: createdAt } },
+      { createdAt, _id: { $lt: oid } },
+    ],
+  };
 }

@@ -3,7 +3,9 @@
 
 import route from '../utils/route.js';
 import { getStorageAdapter } from '#methods/files/index.js';
-import { validateUpload } from '#methods/files/validateUpload.js';
+import { validateUploadFile } from '#methods/files/validateUpload.js';
+import { createReadStream } from 'fs';
+import { unlink } from 'fs/promises';
 import File from '#schema/File.js';
 import MediaJob from '#schema/MediaJob.js';
 import { canonicalTo } from '#methods/parse/canonicalTo.js';
@@ -15,7 +17,19 @@ const MAX_IMAGE_DIMENSION = 2048
 const NEEDS_MEDIA_JOB = new Set(['video/mp4', 'video/quicktime', 'video/x-m4v'])
 
 export default route(
-  async ({ req, body, user, setStatus, set }) => {
+  async (ctx) => {
+    // Temp file from multer diskStorage (routes/files/index.js). Also removed
+    // there on response end; unlinking here too frees disk promptly.
+    try {
+      return await handleUpload(ctx);
+    } finally {
+      if (ctx.req.file?.path) await unlink(ctx.req.file.path).catch(() => {});
+    }
+  },
+  { allowUnauth: false }
+);
+
+async function handleUpload({ req, body, user, setStatus, set }) {
     if (req.multerError) {
       setStatus(413);
       set('error', req.multerError.message || 'File too large');
@@ -28,8 +42,10 @@ export default route(
       return;
     }
 
-    const { originalname: originalFileName, mimetype } = req.file;
-    let { buffer } = req.file;
+    const { originalname: originalFileName, mimetype, path: tempPath, size: tempSize } = req.file;
+    // null for audio/video: those are streamed from the temp file to storage
+    // without being loaded into memory.
+    let buffer = null;
     const { title, summary, thumbnailSizes, parentObject } = body;
     // Default to generating thumbnails; allow opting out by sending "false".
     // The S3Adapter will skip non-image MIME types regardless.
@@ -41,7 +57,7 @@ export default route(
     // and re-encode raster images to strip embedded payloads.
     let mimeType;
     try {
-      ({ buffer, mimeType } = await validateUpload(buffer, mimetype));
+      ({ buffer, mimeType } = await validateUploadFile(tempPath, mimetype));
     } catch (err) {
       setStatus(415);
       set('error', err.message);
@@ -51,7 +67,7 @@ export default route(
     // Cap raster images to MAX_IMAGE_DIMENSION on the long edge.
     // GIFs and SVGs are excluded — sharp doesn't preserve GIF animation,
     // and SVGs are vector so dimension capping doesn't apply.
-    if (mimeType.startsWith('image/') && mimeType !== 'image/svg+xml' && mimeType !== 'image/gif') {
+    if (buffer && mimeType.startsWith('image/') && mimeType !== 'image/svg+xml' && mimeType !== 'image/gif') {
       try {
         const { default: sharp } = await import('sharp')
         const meta = await sharp(buffer).metadata()
@@ -95,16 +111,26 @@ export default route(
       const storage = await getStorageAdapter();
 
       // Always store private in the backend — visibility enforced by the proxy
-      const result = await storage.upload(buffer, {
-        originalFileName,
-        actorId,
-        title,
-        summary,
-        contentType: mimeType,
-        generateThumbnail,
-        thumbnailSizes: thumbnailSizes ? JSON.parse(thumbnailSizes) : [200, 400],
-        isPublic: false,
-      });
+      const result = buffer
+        ? await storage.upload(buffer, {
+            originalFileName,
+            actorId,
+            title,
+            summary,
+            contentType: mimeType,
+            generateThumbnail,
+            thumbnailSizes: thumbnailSizes ? JSON.parse(thumbnailSizes) : [200, 400],
+            isPublic: false,
+          })
+        : await storage.uploadStream(createReadStream(tempPath), {
+            originalFileName,
+            actorId,
+            title,
+            summary,
+            contentType: mimeType,
+            size: tempSize,
+            isPublic: false,
+          });
 
       // Store thumbnail storage keys (not URLs) — proxy builds URLs at serve time
       let thumbnails = null;
@@ -193,9 +219,7 @@ export default route(
       setStatus(500);
       set('error', error.message || 'Failed to upload file');
     }
-  },
-  { allowUnauth: false }
-);
+}
 
 function getFileType(mimeType) {
   if (!mimeType) return 'Document';

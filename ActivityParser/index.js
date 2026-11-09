@@ -10,11 +10,23 @@ import { dirname, join } from "path";
 import { fileURLToPath, pathToFileURL } from "url";
 import { constants } from "fs";
 
-export default async function ActivityParser() {
+import logger from "#methods/utils/logger.js";
+import { reportError } from "#methods/utils/errorReporting.js";
+
+// Memoized registry. Built once per process instead of re-reading the
+// handlers directory on every activity. A build in which any handler failed
+// to import is NOT cached, so the next call retries (same behaviour as before
+// memoization -- this matters under Jest, where file:// dynamic imports fail;
+// see tests/integrations/auth.change-password.test.js).
+let registryPromise = null;
+const reportedImportFailures = new Set();
+
+async function buildRegistry() {
   const __dirname = dirname(fileURLToPath(import.meta.url));
   const HANDLERS_DIR = join(__dirname, "handlers");
 
   const activity = async function () {};
+  let hadImportError = false;
 
   const entries = await readdir(HANDLERS_DIR, { withFileTypes: true });
 
@@ -27,13 +39,25 @@ export default async function ActivityParser() {
     const handlerPath = join(HANDLERS_DIR, verb, "index.js");
     try {
       await access(handlerPath, constants.R_OK);
+    } catch {
+      return; // no index.js in this directory -- not a handler
+    }
+    try {
       const modUrl = pathToFileURL(handlerPath).href;
       const mod = await import(modUrl);
       if (typeof mod.default === "function") {
         Object.defineProperty(activity, verb, { enumerable: true, value: mod.default });
       }
     } catch (err) {
-      // Handler doesn't exist or isn't readable - skip
+      // A real import failure (e.g. syntax error) used to be swallowed and
+      // surface only as "Unsupported activity type". Log + report it, once
+      // per verb per process.
+      hadImportError = true;
+      if (!reportedImportFailures.has(verb)) {
+        reportedImportFailures.add(verb);
+        logger.error(`ActivityParser: failed to load handler "${verb}": ${err?.stack || err}`);
+        reportError(err, { where: "ActivityParser handler import", verb });
+      }
     }
   }));
 
@@ -42,5 +66,21 @@ export default async function ActivityParser() {
     value: entries.filter(e => e.isDirectory()).map(e => e.name),
   });
 
-  return activity;
+  return { activity, hadImportError };
+}
+
+export default async function ActivityParser() {
+  if (!registryPromise) {
+    registryPromise = buildRegistry().then(
+      ({ activity, hadImportError }) => {
+        if (hadImportError) registryPromise = null; // retry next time
+        return activity;
+      },
+      (err) => {
+        registryPromise = null;
+        throw err;
+      }
+    );
+  }
+  return registryPromise;
 }

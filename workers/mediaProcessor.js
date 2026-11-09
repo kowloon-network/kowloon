@@ -4,6 +4,12 @@
 // files ready. Handles retry with exponential backoff.
 
 import mongoose from 'mongoose'
+import { createReadStream, createWriteStream } from 'fs'
+import { stat, unlink } from 'fs/promises'
+import { pipeline } from 'stream/promises'
+import { tmpdir } from 'os'
+import { join } from 'path'
+import { randomUUID } from 'crypto'
 import { MediaJob, File, Settings } from '#schema'
 import { loadSettings } from '#methods/settings/cache.js'
 import { getMediaProcessor } from '#methods/media/index.js'
@@ -16,12 +22,10 @@ const MONGO_URI    = process.env.MONGO_URI || 'mongodb://localhost:27017/kowloon
 const POLL_MS      = parseInt(process.env.MEDIA_POLL_INTERVAL_MS || '5000', 10)
 const CONCURRENCY  = parseInt(process.env.MEDIA_CONCURRENCY || '2', 10)
 const JOB_TTL_MS   = 7 * 24 * 60 * 60 * 1000 // 7 days
-
-async function bufferFromStream(stream) {
-  const chunks = []
-  for await (const chunk of stream) chunks.push(Buffer.from(chunk))
-  return Buffer.concat(chunks)
-}
+// Claim lease + heartbeat: a crashed/killed worker used to leave its job in
+// 'processing' forever. The heartbeat keeps a live (long ffmpeg) job's lease fresh.
+const LEASE_MS     = 15 * 60 * 1000
+const HEARTBEAT_MS = 60 * 1000
 
 async function runJob(job) {
   const storage   = await getStorageAdapter()
@@ -29,35 +33,46 @@ async function runJob(job) {
 
   logger.info('[media-worker] Processing job', { fileId: job.fileId, mimeType: job.mimeType })
 
-  // Download the raw file
-  const stream = await storage.getStream(job.storageKey)
-  const buffer = await bufferFromStream(stream)
+  // Stream the raw file to a temp file instead of buffering it in memory
+  // (videos can be hundreds of MB; ffmpeg needs a file on disk anyway).
+  const inPath = join(tmpdir(), `kowloon-media-${randomUUID()}`)
+  let outPath = null
+  try {
+    await pipeline(await storage.getStream(job.storageKey), createWriteStream(inPath))
 
-  let processed = null
+    if (job.mimeType.startsWith('video/')) {
+      outPath = await processor.processVideoFile(inPath, job.mimeType)
+    } else if (job.mimeType.startsWith('audio/')) {
+      outPath = await processor.processAudioFile(inPath, job.mimeType)
+    }
 
-  if (job.mimeType.startsWith('video/')) {
-    processed = await processor.processVideo(buffer, job.mimeType)
-  } else if (job.mimeType.startsWith('audio/')) {
-    processed = await processor.processAudio(buffer, job.mimeType)
+    // Probe the original, not the processed output — faststart remuxing
+    // doesn't change pixel dimensions, and this lets dimension extraction
+    // happen even when no processing was needed.
+    const dims = await processor.probeDimensionsFile(inPath, job.mimeType).catch((err) => {
+      logger.warn('[media-worker] Dimension probe failed', { fileId: job.fileId, error: err.message })
+      return null
+    })
+
+    await finishJob({ job, storage, outPath, dims })
+  } finally {
+    await unlink(inPath).catch(() => {})
+    if (outPath) await unlink(outPath).catch(() => {})
   }
+}
 
-  // Probe against the original downloaded buffer, not `processed` — faststart
-  // remuxing doesn't change pixel dimensions, and this lets dimension
-  // extraction happen even when processVideo() returns null (no remux needed).
-  const dims = await processor.probeDimensions(buffer, job.mimeType).catch((err) => {
-    logger.warn('[media-worker] Dimension probe failed', { fileId: job.fileId, error: err.message })
-    return null
-  })
-
-  if (processed) {
+async function finishJob({ job, storage, outPath, dims }) {
+  if (outPath) {
     // Replace the raw upload with the processed version at the same key
-    await storage.replace(job.storageKey, processed, {
+    const { size } = await stat(outPath)
+    await storage.replace(job.storageKey, createReadStream(outPath), {
       contentType: job.mimeType,
+      contentLength: size,
       isPublic: false,
     })
     await File.findOneAndUpdate(
       { id: job.fileId },
-      { processingStatus: 'ready', size: processed.length, ...(dims ? { width: dims.width, height: dims.height } : {}) }
+      { processingStatus: 'ready', size, ...(dims ? { width: dims.width, height: dims.height } : {}) }
     )
   } else {
     // Processor returned null — format needs no processing (already progressive)
@@ -74,7 +89,43 @@ async function runJob(job) {
   }
 }
 
+// Requeue jobs whose worker died mid-job (lease expired; pre-lease claims
+// count as expired LEASE_MS after their last update). attempts was already
+// incremented at claim, so a job that keeps crashing the worker still ends
+// up 'failed' after maxAttempts instead of looping forever.
+async function recoverExpiredLeases() {
+  const now = new Date()
+  const stale = await MediaJob.find({
+    status: 'processing',
+    $or: [
+      { leaseUntil: { $lt: now } },
+      { leaseUntil: null, updatedAt: { $lt: new Date(now.getTime() - LEASE_MS) } },
+    ],
+  }).select('_id fileId attempts maxAttempts').lean()
+
+  for (const job of stale) {
+    const exhausted = job.attempts >= job.maxAttempts
+    const res = await MediaJob.updateOne(
+      { _id: job._id, status: 'processing' },
+      {
+        $set: exhausted
+          ? { status: 'failed', error: 'Worker stopped mid-job (lease expired)', expiresAt: new Date(now.getTime() + JOB_TTL_MS) }
+          : { status: 'pending', nextAttemptAt: now, error: 'Requeued: worker stopped mid-job' },
+        $unset: { leaseUntil: 1 },
+      }
+    )
+    if (res.modifiedCount && exhausted) {
+      await File.findOneAndUpdate({ id: job.fileId }, { processingStatus: 'failed' })
+    }
+    if (res.modifiedCount) {
+      logger.warn('[media-worker] Recovered expired lease', { fileId: job.fileId, exhausted })
+    }
+  }
+}
+
 async function pollOnce() {
+  await recoverExpiredLeases()
+
   const jobs = await MediaJob.find({
     status: 'pending',
     nextAttemptAt: { $lte: new Date() },
@@ -87,10 +138,17 @@ async function pollOnce() {
       // Atomic claim — prevents two worker instances from double-processing
       const claimed = await MediaJob.findOneAndUpdate(
         { _id: job._id, status: 'pending' },
-        { $set: { status: 'processing' }, $inc: { attempts: 1 } },
+        { $set: { status: 'processing', leaseUntil: new Date(Date.now() + LEASE_MS) }, $inc: { attempts: 1 } },
         { new: true }
       )
       if (!claimed) return // Another instance grabbed it
+
+      const heartbeat = setInterval(() => {
+        MediaJob.updateOne(
+          { _id: claimed._id, status: 'processing' },
+          { $set: { leaseUntil: new Date(Date.now() + LEASE_MS) } }
+        ).catch((err) => logger.warn('[media-worker] Lease heartbeat failed', { error: err.message }))
+      }, HEARTBEAT_MS)
 
       try {
         await runJob(claimed)
@@ -121,6 +179,8 @@ async function pollOnce() {
           await File.findOneAndUpdate({ id: claimed.fileId }, { processingStatus: 'failed' })
           logger.error('[media-worker] Job permanently failed', { fileId: claimed.fileId })
         }
+      } finally {
+        clearInterval(heartbeat)
       }
     })
   )

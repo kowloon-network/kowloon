@@ -13,6 +13,10 @@ import redactUri from '#methods/utils/redactUri.js'
 const MONGO_URI = process.env.MONGO_URI || 'mongodb://localhost:27017/kowloon'
 const POLL_MS   = parseInt(process.env.BACKUP_POLL_INTERVAL_MS || '10000', 10)
 const JOB_TTL   = 48 * 60 * 60 * 1000  // 48 hours
+// Claim lease + heartbeat: a crashed/killed worker used to leave its job
+// 'running' forever. The heartbeat keeps a live job's lease fresh.
+const LEASE_MS     = 10 * 60 * 1000
+const HEARTBEAT_MS = 2 * 60 * 1000
 
 async function updateProgress(jobId, stage, pct) {
   await BackupJob.findByIdAndUpdate(jobId, {
@@ -21,7 +25,47 @@ async function updateProgress(jobId, stage, pct) {
   })
 }
 
+// Recover jobs whose worker died mid-run (lease expired; jobs claimed before
+// leases existed have none -- treat a missing lease as expired only after
+// LEASE_MS since the last update). Backups are simply requeued. Restores are
+// marked failed instead: re-running a half-applied restore automatically is
+// not safe -- an admin should re-trigger it deliberately.
+async function recoverExpiredLeases() {
+  const now = new Date()
+  const expired = {
+    status: 'running',
+    $or: [
+      { leaseUntil: { $lt: now } },
+      { leaseUntil: null, updatedAt: { $lt: new Date(now.getTime() - LEASE_MS) } },
+    ],
+  }
+  const requeued = await BackupJob.updateMany(
+    { ...expired, type: 'backup' },
+    { $set: { status: 'pending', 'progress.stage': 'Requeued after worker crash', 'progress.pct': 0 }, $unset: { leaseUntil: 1 } }
+  )
+  const failed = await BackupJob.updateMany(
+    { ...expired, type: 'restore' },
+    {
+      $set: {
+        status: 'failed',
+        error: 'Worker stopped mid-restore; restore may be partially applied. Re-run it manually.',
+        'progress.stage': 'Failed',
+        expiresAt: new Date(now.getTime() + JOB_TTL),
+      },
+      $unset: { leaseUntil: 1 },
+    }
+  )
+  if (requeued.modifiedCount || failed.modifiedCount) {
+    logger.warn('[backup-worker] Recovered expired job leases', {
+      requeued: requeued.modifiedCount,
+      failed: failed.modifiedCount,
+    })
+  }
+}
+
 async function pollOnce() {
+  await recoverExpiredLeases()
+
   const jobs = await BackupJob.find({
     status: 'pending',
   }).limit(1).lean()
@@ -33,10 +77,24 @@ async function pollOnce() {
   // Atomic claim
   const claimed = await BackupJob.findOneAndUpdate(
     { _id: job._id, status: 'pending' },
-    { $set: { status: 'running', 'progress.stage': 'Starting', 'progress.pct': 0 } },
+    {
+      $set: {
+        status: 'running',
+        'progress.stage': 'Starting',
+        'progress.pct': 0,
+        leaseUntil: new Date(Date.now() + LEASE_MS),
+      },
+    },
     { new: true }
   )
   if (!claimed) return
+
+  const heartbeat = setInterval(() => {
+    BackupJob.updateOne(
+      { _id: claimed._id, status: 'running' },
+      { $set: { leaseUntil: new Date(Date.now() + LEASE_MS) } }
+    ).catch((err) => logger.warn('[backup-worker] Lease heartbeat failed', { error: err.message }))
+  }, HEARTBEAT_MS)
 
   const makeUpdater = (id) => async (stage, pct) => updateProgress(id, stage, pct)
 
@@ -73,6 +131,8 @@ async function pollOnce() {
       'progress.stage': 'Failed',
       expiresAt: new Date(Date.now() + JOB_TTL),
     })
+  } finally {
+    clearInterval(heartbeat)
   }
 }
 

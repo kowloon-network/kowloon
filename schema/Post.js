@@ -78,6 +78,26 @@ function safeMarkdown(content) {
   });
 }
 
+// PRIVACY: rewrite external <img> in rendered HTML to locally stored copies
+// (or plain links) so readers' browsers never hit third-party hosts. See
+// methods/files/proxyBodyImages.js. Dynamic import avoids a schema <-> methods
+// import cycle. Bodies stored before this existed keep their original src
+// until re-rendered (scripts/rerender-bodies.js).
+async function proxyImages(html, actorId, parentObject) {
+  if (!html || !/<img\b/i.test(html)) return html;
+  try {
+    const { default: proxyBodyImages } = await import("#methods/files/proxyBodyImages.js");
+    return await proxyBodyImages(html, {
+      domain: getServerSettings().domain,
+      actorId,
+      parentObject,
+    });
+  } catch (err) {
+    console.error("proxyImages failed:", err.message);
+    return html;
+  }
+}
+
 // Render markdown/source to plain text, dropping all markup. Inserts a space at
 // every tag boundary so block elements (lists, paragraphs) don't get glued
 // together when the tags are stripped.
@@ -230,6 +250,8 @@ PostSchema.pre("save", async function (next) {
         .split(" ").length;
     this.charCount = this.charCount || this.body.replace(/<[^>]*>/g, "").length;
     this.summary = generateSummary(this.source);
+    this.body = await proxyImages(this.body, this.actorId, this.id);
+    this.summary = await proxyImages(this.summary, this.actorId, this.id);
     this.textPreview = generateTextPreview(this.source);
 
     const sig = await signAs(this.actorId, `${this.id}|${this.source.content}`);
@@ -260,7 +282,7 @@ PostSchema.pre("updateOne", async function (next) {
     const currentDoc = await this.model.findOne(this.getQuery()).lean();
     const newSource = { ...(currentDoc?.source || {}), ...update.$set.source };
 
-    update.$set.body = generateBody(newSource);
+    update.$set.body = await proxyImages(generateBody(newSource), currentDoc?.actorId, currentDoc?.id);
     update.$set.textPreview = generateTextPreview(newSource);
     update.$set.wordCount = update.$set.body.replace(/<[^>]*>/g, "").replace(/[.,\/#!$%\^&\*;:{}=\-_`~()]/g, "").split(" ").length;
     update.$set.charCount = update.$set.body.replace(/<[^>]*>/g, "").length;
@@ -282,7 +304,7 @@ PostSchema.pre("findOneAndUpdate", async function (next) {
       ...update.$set.source,
     };
 
-    update.$set.body = generateBody(newSource);
+    update.$set.body = await proxyImages(generateBody(newSource), currentDoc?.actorId, currentDoc?.id);
     update.$set.textPreview = generateTextPreview(newSource);
 
     const sig = await signAs(currentDoc.actorId, `${currentDoc.id}|${newSource.content}`);

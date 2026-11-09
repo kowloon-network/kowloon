@@ -1,6 +1,7 @@
 // /ActivityParser/handlers/Update/index.js
 
 import bcrypt from "bcryptjs";
+import crypto from "crypto";
 import {
   Bookmark,
   Circle,
@@ -20,6 +21,9 @@ import refreshActorCache from "#methods/users/refreshActorCache.js";
 import sanitizeHtml from "#methods/utils/sanitize.js";
 import { getServerSettings } from "#methods/settings/schemaHelpers.js";
 import resolveAttachments from "#methods/files/resolveAttachment.js";
+import { getSetting } from "#methods/settings/cache.js";
+import { sendEmail } from "#methods/email/index.js";
+import { verificationEmail } from "#methods/email/templates.js";
 
 // Reply (and React) records have empty `to` by design — visibility inherits
 // from the parent — so the generic federation helper returns no targets. For
@@ -288,6 +292,39 @@ export default async function Update(activity) {
     // 4. Strip disallowed fields from the patch
     const patch = filterPatch(parsed.type, activity.object);
 
+    // User identity fields.
+    // - username is part of the account id (@username@domain) and every
+    //   actorId/actor URL derived from it; there is no rename flow that
+    //   rewrites those, so changing it here would orphan the account's
+    //   identity. Refuse (a same-value no-op is allowed).
+    // - email changes must be re-verified: mark unverified and mail a fresh
+    //   token through the same verify-email flow registration uses. Login is
+    //   only gated on verification when requireEmailVerification is on
+    //   (methods/auth/login.js) -- unchanged behaviour.
+    let emailVerificationToken = null;
+    if (parsed.type === "User") {
+      if ("username" in patch) {
+        if (patch.username !== current.username) {
+          return { activity, error: "Update: username cannot be changed" };
+        }
+        delete patch.username;
+      }
+      if ("email" in patch) {
+        const newEmail =
+          typeof patch.email === "string" ? patch.email.trim().toLowerCase() : "";
+        if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(newEmail)) {
+          return { activity, error: "Update: invalid email address" };
+        }
+        if (newEmail === String(current.email || "").toLowerCase()) {
+          delete patch.email; // unchanged -- keep current verification state
+        } else {
+          patch.email = newEmail;
+          patch.emailVerified = false;
+          emailVerificationToken = crypto.randomBytes(32).toString("hex");
+        }
+      }
+    }
+
     if (parsed.type === "Circle") {
       // System circles (Following, All Following, Groups, Blocked, Muted) are
       // load-bearing pointers on the User doc — name/summary/icon are fixed
@@ -463,8 +500,35 @@ export default async function Update(activity) {
       }
     }
 
+    // Email re-verification: token is stored with a separate write so it never
+    // rides along in the Activity record / federated patch.
+    if (emailVerificationToken) {
+      await User.updateOne(
+        { id: current.id },
+        {
+          $set: {
+            emailVerificationToken,
+            emailVerificationExpires: new Date(Date.now() + 24 * 60 * 60 * 1000),
+          },
+        }
+      );
+      try {
+        const verifyUrl = `https://${getSetting("domain")}/verify-email?token=${emailVerificationToken}`;
+        const { subject, html } = verificationEmail({ verifyUrl });
+        await sendEmail({ to: patch.email, subject, html });
+      } catch (err) {
+        console.error("Update: failed to send email verification:", err.message);
+      }
+    }
+
     activity.objectId = updated.id ?? activity.target;
     activity.object = patch; // normalise to the filtered patch for downstream
+    if (parsed.type === "User") {
+      // Private account fields never go into the stored/federated activity.
+      activity.object = { ...patch };
+      delete activity.object.email;
+      delete activity.object.emailVerified;
+    }
 
     // 7. Sync FeedItems cache
     await updateFeedItems(updated, parsed.type, patch);

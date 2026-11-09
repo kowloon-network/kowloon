@@ -96,5 +96,9 @@ ActivitySchema.index({ id: 1 }, { unique: true, partialFilterExpression: { id: {
 ActivitySchema.index({ actorId: 1, id: 1 });
 ActivitySchema.index({ actorId: 1, type: 1 });
 ActivitySchema.index({ "audit.appliedAt": 1 }, { sparse: true });
+// Public firehose (GET /outbox, no from): $or over to / object.to, newest
+// first with a createdAt cursor. One index per $or branch so neither scans.
+ActivitySchema.index({ to: 1, createdAt: -1 });
+ActivitySchema.index({ "object.to": 1, createdAt: -1 });
 
 export default mongoose.model("Activity", ActivitySchema);

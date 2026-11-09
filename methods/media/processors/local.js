@@ -55,6 +55,16 @@ function runFFprobe(args) {
   })
 }
 
+function probeArgs(input) {
+  return ['-v', 'error', '-select_streams', 'v:0', '-show_entries', 'stream=width,height', '-of', 'json', input]
+}
+
+function parseProbe(stdout) {
+  const stream = JSON.parse(stdout)?.streams?.[0]
+  if (!stream?.width || !stream?.height) return null
+  return { width: stream.width, height: stream.height }
+}
+
 export class LocalProcessor extends BaseProcessor {
   async processVideo(buffer, mimeType) {
     if (!FASTSTART_TYPES.has(mimeType)) return null // already progressive
@@ -76,6 +86,34 @@ export class LocalProcessor extends BaseProcessor {
     } finally {
       await unlink(input).catch(() => {})
       await unlink(output).catch(() => {})
+    }
+  }
+
+  // File-path variant: ffmpeg reads/writes disk directly, so the worker never
+  // holds the video in memory. Returns the output temp path (caller unlinks
+  // it) or null when no remux is needed.
+  async processVideoFile(inPath, mimeType) {
+    if (!FASTSTART_TYPES.has(mimeType)) return null // already progressive
+    const output = join(tmpdir(), `kowloon-${randomUUID()}-out.mp4`)
+    try {
+      await runFFmpeg(['-y', '-i', inPath, '-movflags', '+faststart', '-c', 'copy', output])
+      return output
+    } catch (err) {
+      await unlink(output).catch(() => {})
+      throw err
+    }
+  }
+
+  async processAudioFile(_inPath, _mimeType) {
+    return null
+  }
+
+  async probeDimensionsFile(inPath, mimeType) {
+    if (!mimeType.startsWith('video/')) return null
+    try {
+      return parseProbe(await runFFprobe(probeArgs(inPath)))
+    } catch {
+      return null
     }
   }
 
@@ -111,16 +149,7 @@ export class LocalProcessor extends BaseProcessor {
 
     try {
       await writeFile(input, buffer)
-      const stdout = await runFFprobe([
-        '-v', 'error',
-        '-select_streams', 'v:0',
-        '-show_entries', 'stream=width,height',
-        '-of', 'json',
-        input,
-      ])
-      const stream = JSON.parse(stdout)?.streams?.[0]
-      if (!stream?.width || !stream?.height) return null
-      return { width: stream.width, height: stream.height }
+      return parseProbe(await runFFprobe(probeArgs(input)))
     } catch (err) {
       return null
     } finally {
