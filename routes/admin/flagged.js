@@ -59,7 +59,7 @@ async function targetSummary(flag, { full = false } = {}) {
   const Model = MODELS[flag.targetType];
   if (!Model) return { exists: false };
   const doc = await Model.findOne({ id: flag.target })
-    .select("name title summary body source deletedAt type image attachments")
+    .select("name title summary body source deletedAt type image attachments actorId")
     .lean();
   if (!doc) return { exists: false };
   const bodyHtml = doc.body ?? doc.source?.content ?? "";
@@ -71,6 +71,7 @@ async function targetSummary(flag, { full = false } = {}) {
     type: doc.type || flag.targetType,
     title,
     excerpt,
+    actorId: doc.actorId || null,
   };
   if (full) {
     out.image = doc.image || null;
@@ -84,14 +85,18 @@ async function targetSummary(flag, { full = false } = {}) {
 }
 
 async function enrichFlag(flag, opts) {
-  const [targetActor, reporter, resolver, target] = await Promise.all([
-    actorSummary(flag.targetActorId),
+  const [reporter, resolver, target] = await Promise.all([
     actorSummary(flag.actorId),
     opts?.full ? actorSummary(flag.resolvedBy) : null,
     targetSummary(flag, opts),
   ]);
+  // Older flags (and some clients) never recorded the author; the reported
+  // object itself knows who wrote it.
+  const authorId = flag.targetActorId || target?.actorId || null;
+  const targetActor = await actorSummary(authorId);
   return {
     ...sanitize(flag),
+    targetActorId: authorId,
     targetActor,
     reporter,
     ...(opts?.full ? { resolver } : {}),
@@ -382,6 +387,14 @@ router.post(
       const flag = await loadOpenFlag(params.id, setStatus, set);
       if (!flag) return;
 
+      if (!flag.targetActorId) {
+        // Older flags didn't record the author; ask the reported object.
+        const Model = MODELS[flag.targetType];
+        const doc = Model
+          ? await Model.findOne({ id: flag.target }).select("actorId").lean()
+          : null;
+        if (doc?.actorId) flag.targetActorId = doc.actorId;
+      }
       if (!flag.targetActorId) {
         setStatus(400);
         set("error", "This flag has no known author to block");
