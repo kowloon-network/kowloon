@@ -17,7 +17,7 @@ import { assertAdminBookmarkParentIsTopLevel } from "#methods/bookmarks/visibili
 const router = express.Router({ mergeParams: true });
 
 const ALLOWED_FIELDS = [
-  "title", "summary", "type", "href", "target", "image", "tags", "to", "parentFolder",
+  "title", "summary", "type", "href", "target", "image", "tags", "to", "parentFolder", "order",
 ];
 
 function sanitize(doc) {
@@ -60,10 +60,44 @@ router.get(
       return filter;
     },
     select: "-signature",
-    sort: { createdAt: -1 },
+    sort: { order: 1, createdAt: -1 },
     sanitize,
     routeOpts: { allowUnauth: false },
   })
+);
+
+// POST /admin/bookmarks/reorder -- body { ids: [...] }: the new order of one set
+// of siblings (same parentFolder), top first. Each gets order = its index.
+// Every id must be a bookmarksS with that same parent (server-owned only).
+router.post(
+  "/reorder",
+  route(
+    async ({ body, set, setStatus }) => {
+      const ids = Array.isArray(body?.ids) ? body.ids.filter((x) => typeof x === "string") : [];
+      if (!ids.length || ids.length > 500 || new Set(ids).size !== ids.length) {
+        setStatus(400);
+        set("error", "ids must be a non-empty list of distinct ids");
+        return;
+      }
+      const docs = await Bookmark.find({ id: { $in: ids }, actorId: getServerActorId() }).select("id parentFolder").lean();
+      if (docs.length !== ids.length) {
+        setStatus(400);
+        set("error", "Some of those items don't exist");
+        return;
+      }
+      const parents = new Set(docs.map((d) => d.parentFolder || null));
+      if (parents.size !== 1) {
+        setStatus(400);
+        set("error", "Items can only be reordered among their siblings");
+        return;
+      }
+      await Bookmark.bulkWrite(
+        ids.map((id, i) => ({ updateOne: { filter: { id }, update: { $set: { order: i } } } }))
+      );
+      set("ok", true);
+    },
+    { allowUnauth: false }
+  )
 );
 
 // GET /admin/bookmarks/:id

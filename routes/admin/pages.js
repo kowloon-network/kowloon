@@ -50,6 +50,40 @@ router.get(
   })
 );
 
+// POST /admin/pages/reorder -- body { ids: [...] }: the new order of one set
+// of siblings (same parentId), top first. Each gets order = its index.
+// Every id must be a pagesS with that same parent.
+router.post(
+  "/reorder",
+  route(
+    async ({ body, set, setStatus }) => {
+      const ids = Array.isArray(body?.ids) ? body.ids.filter((x) => typeof x === "string") : [];
+      if (!ids.length || ids.length > 500 || new Set(ids).size !== ids.length) {
+        setStatus(400);
+        set("error", "ids must be a non-empty list of distinct ids");
+        return;
+      }
+      const docs = await Page.find({ id: { $in: ids } }).select("id parentId").lean();
+      if (docs.length !== ids.length) {
+        setStatus(400);
+        set("error", "Some of those items don't exist");
+        return;
+      }
+      const parents = new Set(docs.map((d) => d.parentId || null));
+      if (parents.size !== 1) {
+        setStatus(400);
+        set("error", "Items can only be reordered among their siblings");
+        return;
+      }
+      await Page.bulkWrite(
+        ids.map((id, i) => ({ updateOne: { filter: { id }, update: { $set: { order: i } } } }))
+      );
+      set("ok", true);
+    },
+    { allowUnauth: false }
+  )
+);
+
 // GET /admin/pages/:id
 router.get(
   "/:id",

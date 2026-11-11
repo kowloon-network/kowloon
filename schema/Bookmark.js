@@ -57,6 +57,12 @@ const BookmarkSchema = new Schema(
     target: { type: String, default: undefined, index: true },
     href: { type: String, default: undefined },
 
+    // Position among siblings (same parentFolder), lowest first. Set by the
+    // admin's drag-to-reorder; everything else sorts by it with createdAt
+    // (newest first) as the tie-break, so un-ordered bookmarks keep their
+    // old newest-first order.
+    order: { type: Number, default: 0 },
+
     // Presentation
     title: { type: String, default: undefined },
     image: { type: String, default: undefined },

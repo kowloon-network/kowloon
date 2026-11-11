@@ -17,7 +17,7 @@ import { getViewerContext } from "#methods/visibility/context.js";
 import { buildVisibilityQuery } from "#methods/visibility/filter.js";
 
 const SELECT =
-  "id type title summary href target image tags to parentFolder actorId url createdAt updatedAt";
+  "id type title summary href target image tags to parentFolder order actorId url createdAt updatedAt";
 
 function getServerActorId() {
   const domain = getSetting("domain");
@@ -36,7 +36,7 @@ export default route(async ({ query, user, set }) => {
     ],
   })
     .select(SELECT)
-    .sort({ createdAt: -1 })
+    .sort({ order: 1, createdAt: -1 })
     .limit(limit)
     .lean();
 
@@ -50,7 +50,7 @@ export default route(async ({ query, user, set }) => {
         ],
       })
         .select(SELECT)
-        .sort({ createdAt: -1 })
+        .sort({ order: 1, createdAt: -1 })
         .lean()
     : [];
 
