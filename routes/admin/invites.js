@@ -1,6 +1,7 @@
 // routes/admin/invites.js
 // Admin invite management — all routes require server admin
 
+import { isEmailBanned } from "#methods/moderation/blocklist.js";
 import route from "../utils/route.js";
 import { Invite } from "#schema";
 import { activityStreamsCollection } from "../utils/oc.js";
@@ -65,6 +66,12 @@ export const create = route(
     if (type === "individual" && !email) {
       setStatus(400);
       set("error", "email is required for individual invites");
+      return;
+    }
+
+    if (type === "individual" && (await isEmailBanned(email))) {
+      setStatus(409);
+      set("error", "That email address is on the server's ban list");
       return;
     }
 

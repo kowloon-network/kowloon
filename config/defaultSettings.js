@@ -168,12 +168,37 @@ const defaultSettings = (ctx) => {
     },
 
     // ── Moderation ───────────────────────────────────────────────────────────
-    blocked: {
-      value: {},
-      summary: "Blocked domains/servers. Keys are domains, values are block reasons.",
+    blockedCircle: {
+      value: "",
+      summary: "ID of the server's Blocked circle (banned people, blocked servers). Managed automatically.",
+      to: "@admin",
+      canEdit: "@private",
+      ui: { type: "redacted", label: "Blocked Circle ID", group: "moderation", order: 90 },
+    },
+
+    defederatedCircle: {
+      value: "",
+      summary: "ID of the server's Defederated circle (servers cut off completely). Managed automatically.",
+      to: "@admin",
+      canEdit: "@private",
+      ui: { type: "redacted", label: "Defederated Circle ID", group: "moderation", order: 91 },
+    },
+
+    // Emails and email domains that can't be used to sign up, change an
+    // account's email, or receive an individual invite. Admin-only. Each
+    // entry: { value, note, addedAt }. Managed from Moderation > Emails.
+    bannedEmails: {
+      value: [],
+      summary: "Banned email addresses.",
       to: "@admin",
       canEdit: "@admin",
-      ui: { type: "json", label: "Blocked Domains", group: "moderation", order: 1 },
+    },
+
+    bannedEmailDomains: {
+      value: [],
+      summary: "Banned email domains.",
+      to: "@admin",
+      canEdit: "@admin",
     },
 
     rules: {

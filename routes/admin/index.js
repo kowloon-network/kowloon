@@ -19,6 +19,7 @@ import backupRouter from "./backup.js";
 import sectionsRouter from "./sections.js";
 import discoveryRouter from "./discovery.js";
 import serversRouter from "./servers.js";
+import blocklistRouter from "./blocklist.js";
 
 const router = express.Router({ mergeParams: true });
 
@@ -91,5 +92,6 @@ router.use("/backup", backupRouter);
 router.use("/sections", sectionsRouter);
 router.use("/discovery", discoveryRouter);
 router.use("/servers", serversRouter);
+router.use("/blocklist", blocklistRouter);
 
 export default router;

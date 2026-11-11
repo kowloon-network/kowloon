@@ -1,5 +1,6 @@
 // /ActivityParser/handlers/Update/index.js
 
+import { isEmailBanned } from "#methods/moderation/blocklist.js";
 import bcrypt from "bcryptjs";
 import crypto from "crypto";
 import {
@@ -317,6 +318,8 @@ export default async function Update(activity) {
         }
         if (newEmail === String(current.email || "").toLowerCase()) {
           delete patch.email; // unchanged -- keep current verification state
+        } else if (await isEmailBanned(newEmail)) {
+          return { activity, error: "Update: that email address can't be used on this server" };
         } else {
           patch.email = newEmail;
           patch.emailVerified = false;

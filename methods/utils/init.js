@@ -151,6 +151,21 @@ export default async function init(Kowloon, ctx = {}) {
   }
   console.log("Kowloon settings loaded and cached");
 
+  // Server block lists (methods/moderation/blocklist.js): make sure the
+  // Blocked and Defederated circles exist, carry over any servers blocked
+  // through the old per-server records, and drop the retired "blocked"
+  // setting (a domain map nothing ever read).
+  try {
+    const { getListCircle, migrateServerBlocks } = await import("#methods/moderation/blocklist.js");
+    await getListCircle("blocked");
+    await getListCircle("defederated");
+    const moved = await migrateServerBlocks();
+    if (moved) console.log(`Block lists: carried over ${moved} blocked/defederated server(s)`);
+    await Settings.deleteOne({ name: "blocked" });
+  } catch (e) {
+    console.error("Block list setup failed:", e.message);
+  }
+
   // 3) Create admin user from installer credentials (only if provided and no users exist)
   if (ctx.adminUsername && ctx.adminPassword) {
     const firstUser = await User.findOne({ username: ctx.adminUsername }).lean();

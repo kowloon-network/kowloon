@@ -14,6 +14,7 @@ import route from "../utils/route.js";
 import { FederatedServer } from "#schema";
 import parseServerDomain from "#methods/parse/serverDomain.js";
 import getSettings from "#methods/settings/get.js";
+import { addToList, removeFromList } from "#methods/moderation/blocklist.js";
 
 const router = express.Router({ mergeParams: true });
 
@@ -85,12 +86,14 @@ router.post(
           ? body.reason.trim()
           : undefined;
 
-      // upsert: an admin may well block a server this one has never met.
-      if (level === "suspended") {
-        await FederatedServer.suspendServer(domain, reason);
-      } else {
-        await FederatedServer.blockServer(domain, reason);
-      }
+      // Goes through the block lists (methods/moderation/blocklist.js), which
+      // also keep FederatedServer.status in step. Upserts: an admin may well
+      // block a server this one has never met.
+      await addToList({
+        list: level === "suspended" ? "defederated" : "blocked",
+        target: domain,
+        summary: reason,
+      });
 
       const doc = await FederatedServer.findOne({ domain })
         .select("domain name profile status blockedAt blockedReason suspendedAt suspendedReason software")
@@ -127,9 +130,9 @@ router.post(
       }
 
       if (doc.status === "suspended") {
-        await FederatedServer.unsuspendServer(domain);
+        await removeFromList({ list: "defederated", id: domain }).catch(() => FederatedServer.unsuspendServer(domain));
       } else if (doc.status === "blocked") {
-        await FederatedServer.unblockServer(domain);
+        await removeFromList({ list: "blocked", id: domain }).catch(() => FederatedServer.unblockServer(domain));
       } else {
         setStatus(409);
         set("error", "That server isn't blocked");

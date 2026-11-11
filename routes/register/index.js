@@ -4,6 +4,7 @@
 // Body: { username, password, email?, profile?, ... }
 // Response (JSON): { user, token }
 
+import { isEmailBanned, isUsernameBanned } from "#methods/moderation/blocklist.js";
 import crypto from "crypto";
 import express from "express";
 import route from "#routes/utils/route.js";
@@ -183,6 +184,18 @@ const registerHandler = route(
     if (existing) {
       setStatus(409);
       set("error", "User already exists");
+      return;
+    }
+
+    // The server's block lists: a banned person's username stays reserved,
+    // and banned emails / email domains can't sign up. Same generic message
+    // either way, so the check can't be used to probe the lists.
+    if (
+      (await isUsernameBanned(input.username)) ||
+      (isNonEmpty(input.email) && (await isEmailBanned(input.email)))
+    ) {
+      setStatus(403);
+      set("error", "This account can't be created on this server");
       return;
     }
 

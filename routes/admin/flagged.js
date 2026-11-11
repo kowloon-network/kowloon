@@ -5,6 +5,7 @@ import makeCollection from "../utils/makeCollection.js";
 import { Flag, Post, Reply, Page, Bookmark, Group, Circle, User, FeedItems } from "#schema";
 import createNotification from "#methods/notifications/create.js";
 import { getSetting } from "#methods/settings/cache.js";
+import { addToList, BlocklistError } from "#methods/moderation/blocklist.js";
 
 const router = express.Router({ mergeParams: true });
 
@@ -376,14 +377,14 @@ router.post(
   )
 );
 
-// POST /admin/flagged/:id/block — deactivate the target's author account,
-// resolve the flag. Notifies the reporter only -- a deactivated account
-// can't read notifications, and there's no separate ask to tell the blocked
-// user why.
+// POST /admin/flagged/:id/block { confirmBan?, summary? } -- put the
+// target's author on the server's Blocked list and resolve the flag. For a
+// local author that's a ban (permanent deletion; needs confirmBan: true,
+// else 409). Notifies the reporter only.
 router.post(
   "/:id/block",
   route(
-    async ({ params, user: adminUser, set, setStatus }) => {
+    async ({ params, body, user: adminUser, set, setStatus }) => {
       const flag = await loadOpenFlag(params.id, setStatus, set);
       if (!flag) return;
 
@@ -401,15 +402,27 @@ router.post(
         return;
       }
 
-      const author = await User.findOne({ id: flag.targetActorId });
-      if (!author) {
-        setStatus(404);
-        set("error", "Author account not found");
-        return;
+      // Goes on the server's Blocked list (methods/moderation/blocklist.js).
+      // For someone on THIS server that's a ban: their account and content
+      // are permanently deleted, so the admin must confirm it (confirmBan).
+      // For someone elsewhere, everything they send us is refused.
+      try {
+        await addToList({
+          list: "blocked",
+          target: flag.targetActorId,
+          summary: typeof body?.summary === "string" && body.summary.trim()
+            ? body.summary
+            : `Reported for ${flag.reason?.label || flag.reason?.code || "a rules violation"}`,
+          confirmBan: body?.confirmBan === true,
+        });
+      } catch (err) {
+        if (err instanceof BlocklistError) {
+          setStatus(err.status);
+          set("error", err.message);
+          return;
+        }
+        throw err;
       }
-      author.active = false;
-      author.deletedAt = new Date();
-      await author.save();
 
       flag.status = "resolved";
       flag.resolvedAt = new Date();

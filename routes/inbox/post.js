@@ -1,4 +1,5 @@
 // /routes/inbox/post.js
+import { isActorBlocked } from "#methods/moderation/blocklist.js";
 import route from "../utils/route.js";
 import Kowloon from "#kowloon";
 import Inbox from "#schema/Inbox.js";
@@ -188,6 +189,18 @@ export default route(
         set({ error: "Interactions from your server are not accepted" });
         return;
       }
+    }
+
+    // 1.6) A person on the server's Blocked list: refuse everything they
+    // send (methods/moderation/blocklist.js).
+    if (await isActorBlocked(actorId)) {
+      log.info("Activity refused: actor is on the server Blocked list", {
+        actorId,
+        type: body.type,
+      });
+      setStatus(403);
+      set({ error: "Activities from this account are not accepted" });
+      return;
     }
 
     // 2) Check if actor is blocked before processing

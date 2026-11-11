@@ -90,7 +90,16 @@ function memberSnapshot(user) {
   };
 }
 
-export default async function deleteAccountCascade(actorId) {
+// Content fields stripped from a banned person's posts/replies/pages/
+// bookmarks (opts.purgeContent). The tombstone row itself stays, so
+// federation delete propagation and reply threading still work, but nothing
+// they wrote is kept.
+const CONTENT_FIELDS = {
+  body: "", source: "", summary: "", name: "", title: "", image: "",
+  attachments: "", href: "", location: "", tags: "", event: "", content: "",
+};
+
+export default async function deleteAccountCascade(actorId, opts = {}) {
   const ownedGroups = await Group.find({ actorId }).select("id circles").lean();
 
   // Sole-admin-with-a-group guard: block rather than invent server-owned-Group
@@ -146,13 +155,16 @@ export default async function deleteAccountCascade(actorId) {
   // likely never re-runs the backfill). Matching both fields is the safe
   // fix; this is a pre-existing bug independent of this cascade.
   const tombstone = TOMBSTONE(actorId);
+  const update = opts.purgeContent
+    ? { $set: tombstone, $unset: CONTENT_FIELDS }
+    : { $set: tombstone };
   await Promise.all([
-    Post.updateMany({ actorId }, { $set: tombstone }),
-    Reply.updateMany({ actorId }, { $set: tombstone }),
-    Page.updateMany({ actorId }, { $set: tombstone }),
+    Post.updateMany({ actorId }, update),
+    Reply.updateMany({ actorId }, update),
+    Page.updateMany({ actorId }, update),
     Bookmark.updateMany(
       { $or: [{ ownerId: actorId }, { actorId }] },
-      { $set: tombstone }
+      update
     ),
   ]);
 

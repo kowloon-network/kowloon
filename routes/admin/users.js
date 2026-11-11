@@ -1,4 +1,5 @@
 // routes/admin/users.js
+import { isEmailBanned, isUsernameBanned } from "#methods/moderation/blocklist.js";
 import crypto from "crypto";
 import express from "express";
 import route from "../utils/route.js";
@@ -145,6 +146,12 @@ router.post(
           "abcdefghijkmnopqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789";
         const bytes = crypto.randomBytes(24);
         password = Array.from(bytes, (b) => alphabet[b % alphabet.length]).join("");
+      }
+
+      if ((await isUsernameBanned(username)) || (email && (await isEmailBanned(email)))) {
+        setStatus(409);
+        set("error", "That username or email is on the server's ban list");
+        return;
       }
 
       const expectedId = `@${username}@${domain}`;
