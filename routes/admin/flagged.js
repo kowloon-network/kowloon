@@ -19,6 +19,86 @@ function sanitize(doc) {
   return rest;
 }
 
+// Flags store bare IDs. Admin screens need something a person recognises --
+// the reported thing's title (or an excerpt), and the author's and
+// reporter's display names -- so list/detail responses carry those too.
+function plainExcerpt(html, max = 120) {
+  const text = String(html || "")
+    .replace(/<[^>]*>/g, " ")
+    .replace(/&nbsp;/g, " ")
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/\s+/g, " ")
+    .trim();
+  return text.length > max ? `${text.slice(0, max - 1).trimEnd()}...` : text;
+}
+
+async function actorSummary(id) {
+  if (!id) return null;
+  const u = await User.findOne({ id }).select("id username profile.name profile.icon").lean();
+  if (!u) return { id, name: null, icon: null };
+  return { id: u.id, name: u.profile?.name || u.username || null, icon: u.profile?.icon || null };
+}
+
+async function targetSummary(flag, { full = false } = {}) {
+  if (flag.targetType === "User") {
+    const u = await User.findOne({ id: flag.target })
+      .select("id username profile.name profile.description deletedAt active")
+      .lean();
+    if (!u) return { exists: false };
+    return {
+      exists: true,
+      removed: !!u.deletedAt || u.active === false,
+      title: u.profile?.name || u.username || null,
+      excerpt: plainExcerpt(u.profile?.description, full ? 600 : 120) || null,
+    };
+  }
+  const Model = MODELS[flag.targetType];
+  if (!Model) return { exists: false };
+  const doc = await Model.findOne({ id: flag.target })
+    .select("name title summary body source deletedAt type image attachments")
+    .lean();
+  if (!doc) return { exists: false };
+  const bodyHtml = doc.body ?? doc.source?.content ?? "";
+  const title = doc.name || doc.title || null;
+  const excerpt = plainExcerpt(doc.summary || bodyHtml, full ? 600 : 120) || null;
+  const out = {
+    exists: true,
+    removed: !!doc.deletedAt,
+    type: doc.type || flag.targetType,
+    title,
+    excerpt,
+  };
+  if (full) {
+    out.image = doc.image || null;
+    out.attachments = (doc.attachments || []).slice(0, 4).map((a) => ({
+      url: a.url,
+      mediaType: a.mediaType,
+      name: a.name,
+    }));
+  }
+  return out;
+}
+
+async function enrichFlag(flag, opts) {
+  const [targetActor, reporter, resolver, target] = await Promise.all([
+    actorSummary(flag.targetActorId),
+    actorSummary(flag.actorId),
+    opts?.full ? actorSummary(flag.resolvedBy) : null,
+    targetSummary(flag, opts),
+  ]);
+  return {
+    ...sanitize(flag),
+    targetActor,
+    reporter,
+    ...(opts?.full ? { resolver } : {}),
+    targetSummary: target,
+  };
+}
+
 function hrefForTarget(targetType, targetId) {
   const domain = getSetting("domain");
   const base = `https://${domain}`;
@@ -58,7 +138,7 @@ router.get(
       return filter;
     },
     sort: { createdAt: -1 },
-    sanitize,
+    sanitize: (doc) => enrichFlag(doc),
     routeOpts: { allowUnauth: false },
   })
 );
@@ -74,7 +154,7 @@ router.get(
         set("error", "Flag not found");
         return;
       }
-      set("flag", sanitize(flag));
+      set("flag", await enrichFlag(flag, { full: true }));
     },
     { allowUnauth: false }
   )
