@@ -10,7 +10,7 @@
 //   Public firehose (no from): Human-readable ActivityStreams activity feed (unauthenticated).
 
 import route from "../utils/route.js";
-import { Activity, Circle, FeedItems, Post } from "#schema";
+import { Activity, Circle, FeedItems, Group, Page, Post, Reply } from "#schema";
 import { getSetting } from "#methods/settings/cache.js";
 import verifyHttpSignature from "#methods/federation/verifyHttpSignature.js";
 import { isDefederated, isPersonBlocked } from "#methods/moderation/federationPolicy.js";
@@ -85,18 +85,23 @@ export default route(
       // aren't skipped; the puller dedupes the repeated boundary item.
       const beforeRaw = typeof query.before === "string" ? new Date(query.before) : null;
       const before = beforeRaw && !isNaN(beforeRaw) ? beforeRaw : null;
-      const publishedRange = {};
-      if (since) publishedRange.$gte = since;
-      if (before) publishedRange.$lte = before;
-      const sinceFilter = Object.keys(publishedRange).length ? { publishedAt: publishedRange } : {};
+      // "Changed since": published OR edited since then, so edits to items
+      // the puller already has reach it too (updatedAt is FeedItems'
+      // timestamp, bumped by every edit). `before` pages by publishedAt.
+      const windowClauses = [];
+      if (since) {
+        windowClauses.push({ $or: [{ publishedAt: { $gte: since } }, { updatedAt: { $gte: since } }] });
+      }
+      if (before) windowClauses.push({ publishedAt: { $lte: before } });
 
       const serverFroms = froms.filter(isServerEntry);
-      const userFroms = froms.filter((f) => !isServerEntry(f));
+      const groupFroms = froms.filter((f) => f.startsWith("group:"));
+      const userFroms = froms.filter((f) => !isServerEntry(f) && !f.startsWith("group:"));
 
       const baseFilter = {
         tombstoned: { $ne: true },
         objectType: { $nin: ["Group", "Circle"] },
-        ...sinceFilter,
+        ...(windowClauses.length ? { $and: windowClauses } : {}),
       };
 
       // Find circles owned by userFrom users that contain any to users.
@@ -166,7 +171,7 @@ export default route(
           actorId: { $in: userFroms },
           to: { $in: circleIds },
           deletedAt: null,
-          ...(since ? { createdAt: { $gte: since } } : {}),
+          ...(since ? { $or: [{ createdAt: { $gte: since } }, { updatedAt: { $gte: since } }] } : {}),
         })
           .select("id to")
           .lean();
@@ -180,6 +185,37 @@ export default route(
             tombstoned: { $ne: true },
             ...(before ? { publishedAt: { $lte: before } } : {}),
           })
+            .sort({ publishedAt: -1 })
+            .limit(limit)
+            .lean();
+        }
+      }
+
+      // 4. Posts in groups named in `from` (group ids, "group:x@ourdomain").
+      //    Recipients = `to` users who are members of that group -- we know
+      //    the membership, the puller doesn't. Previously group ids were
+      //    treated as authors and matched nothing.
+      const groupMembers = {}; // groupId -> Set of to-user ids
+      let groupItems = [];
+      if (groupFroms.length > 0) {
+        const groups = await Group.find({ id: { $in: groupFroms }, deletedAt: null })
+          .select("id circles.members")
+          .lean();
+        const membersCircleIds = groups.map((g) => g.circles?.members).filter(Boolean);
+        const memberCircles = membersCircleIds.length
+          ? await Circle.find({ id: { $in: membersCircleIds }, "members.id": { $in: tos } })
+              .select("id members.id")
+              .lean()
+          : [];
+        const byCircle = new Map(memberCircles.map((c) => [c.id, c]));
+        for (const g of groups) {
+          const c = byCircle.get(g.circles?.members);
+          const set = new Set((c?.members || []).map((m) => m.id).filter((id) => tos.includes(id)));
+          if (set.size) groupMembers[g.id] = set;
+        }
+        const memberGroupIds = Object.keys(groupMembers);
+        if (memberGroupIds.length) {
+          groupItems = await FeedItems.find({ ...baseFilter, group: { $in: memberGroupIds } })
             .sort({ publishedAt: -1 })
             .limit(limit)
             .lean();
@@ -213,6 +249,11 @@ export default route(
         if (members?.size > 0) addToMap(item, members);
       }
 
+      for (const item of groupItems) {
+        const members = groupMembers[item.group];
+        if (members?.size > 0) addToMap(item, members);
+      }
+
       // Sort newest first and cut to `limit`. Each sub-query above is
       // limited separately, so the merged list can exceed `limit`; returning
       // all of it would make `next` (oldest returned) jump past items a
@@ -243,14 +284,23 @@ export default route(
           const dom = s.slice(1).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
           tombOr.push({ actorId: { $regex: `@${dom}$`, $options: "i" } });
         }
-        if (tombOr.length) {
-          const deleted = await Post.find({
-            deletedAt: { $gte: since },
-            $or: tombOr,
-          })
-            .select("id")
-            .lean();
-          tombstones = deleted.map((d) => d.id);
+        // Posts in the requested groups (a group post's `to` is the group).
+        const memberGroupIds = Object.keys(groupMembers);
+        if (tombOr.length || memberGroupIds.length) {
+          const postOr = [...tombOr];
+          if (memberGroupIds.length) postOr.push({ to: { $in: memberGroupIds } });
+          // Replies and Pages are cached by pullers too, so their deletions
+          // count -- not just Posts.
+          const [posts, replies, pages] = await Promise.all([
+            Post.find({ deletedAt: { $gte: since }, $or: postOr }).select("id").lean(),
+            tombOr.length
+              ? Reply.find({ deletedAt: { $gte: since }, $or: tombOr }).select("id").lean()
+              : [],
+            tombOr.length
+              ? Page.find({ deletedAt: { $gte: since }, $or: tombOr }).select("id").lean()
+              : [],
+          ]);
+          tombstones = [...posts, ...replies, ...pages].map((d) => d.id);
         }
       }
 
