@@ -10,7 +10,7 @@
 //   Public firehose (no from): Human-readable ActivityStreams activity feed (unauthenticated).
 
 import route from "../utils/route.js";
-import { Activity, Circle, FeedItems, Group, Page, Post, Reply } from "#schema";
+import { Activity, Circle, FeedItems, Group, Page, Post, Reply, User } from "#schema";
 import { getSetting } from "#methods/settings/cache.js";
 import verifyHttpSignature from "#methods/federation/verifyHttpSignature.js";
 import { isDefederated, isPersonBlocked } from "#methods/moderation/federationPolicy.js";
@@ -252,6 +252,36 @@ export default route(
       for (const item of groupItems) {
         const members = groupMembers[item.group];
         if (members?.size > 0) addToMap(item, members);
+      }
+
+      // An author who has blocked one of our members gets no copy to them:
+      // drop that member from the item's recipients, and the item if nobody
+      // is left. Applies to every kind of item (public, circle, server, group).
+      if (itemMap.size) {
+        const authors = [...new Set([...itemMap.values()].map(({ item }) => item.actorId).filter(Boolean))];
+        const authorDocs = authors.length
+          ? await User.find({ id: { $in: authors } }).select("id circles.blocked").lean()
+          : [];
+        const blockedCircleIds = authorDocs.map((u) => u.circles?.blocked).filter(Boolean);
+        const blockedCircles = blockedCircleIds.length
+          ? await Circle.find({ id: { $in: blockedCircleIds }, "members.id": { $in: tos } })
+              .select("id members.id")
+              .lean()
+          : [];
+        if (blockedCircles.length) {
+          const byCircle = new Map(blockedCircles.map((c) => [c.id, c]));
+          const blockedBy = new Map(); // authorId -> Set of our members they blocked
+          for (const u of authorDocs) {
+            const c = byCircle.get(u.circles?.blocked);
+            if (c) blockedBy.set(u.id, new Set(c.members.map((m) => m.id)));
+          }
+          for (const [id, entry] of itemMap) {
+            const blocked = blockedBy.get(entry.item.actorId);
+            if (!blocked) continue;
+            for (const r of blocked) entry.recipients.delete(r);
+            if (entry.recipients.size === 0) itemMap.delete(id);
+          }
+        }
       }
 
       // Sort newest first and cut to `limit`. Each sub-query above is
