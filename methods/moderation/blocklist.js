@@ -451,25 +451,35 @@ export async function getLists() {
 // Startup sync, both directions.
 //
 // 1. Any server blocked or suspended via the old Moderation > Servers records
-//    gets a matching circle entry. blockedAt/suspendedAt count too: before
-//    2026-11-12 a successful pull or profile fetch reset status to "active"
-//    without clearing them, so they are the surviving record of a block the
-//    bug silently undid. (unblockServer/unsuspendServer clear them, so a real
-//    unblock is never resurrected.)
+//    gets a matching circle entry.
 // 2. Every server on either list gets the matching FederatedServer status,
 //    which the older enforcement paths still read.
+//
+// Before 2026-11-12 a successful pull or profile fetch reset status to
+// "active", silently undoing blocks. blockedAt/suspendedAt survived that, but
+// they also survive some legitimate unblocks (block after suspend, then
+// unblock, left suspendedAt behind), so they are NOT used to re-block
+// anything automatically -- they're only logged for an admin to review.
 export async function migrateServerBlocks() {
-  const docs = await FederatedServer.find({
-    $or: [
-      { status: { $in: ["blocked", "suspended"] } },
-      { blockedAt: { $ne: null } },
-      { suspendedAt: { $ne: null } },
-    ],
-  })
-    .select("domain name profile status blockedAt suspendedAt blockedReason suspendedReason")
+  const docs = await FederatedServer.find({ status: { $in: ["blocked", "suspended"] } })
+    .select("domain name profile status blockedReason suspendedReason")
     .lean();
   const added = await addMissingServerEntries(docs);
   await syncServerStatuses();
+  const { blockedServers, defederatedServers } = await getBlockSets();
+  const suspect = await FederatedServer.find({
+    status: { $nin: ["blocked", "suspended"] },
+    $or: [{ blockedAt: { $ne: null } }, { suspendedAt: { $ne: null } }],
+  })
+    .select("domain blockedAt suspendedAt")
+    .lean();
+  const unlisted = suspect.filter((d) => !blockedServers.has(d.domain) && !defederatedServers.has(d.domain));
+  if (unlisted.length) {
+    console.warn(
+      "blocklist: servers with a past block/suspension that are not on either list now -- review in Moderation:",
+      unlisted.map((d) => d.domain).join(", ")
+    );
+  }
   return added;
 }
 
@@ -481,7 +491,7 @@ async function addMissingServerEntries(docs) {
   for (const d of docs) {
     const id = `@${d.domain}`;
     if (has(blocked, id) || has(defed, id)) continue;
-    const list = d.status === "suspended" || d.suspendedAt ? "defederated" : "blocked";
+    const list = d.status === "suspended" ? "defederated" : "blocked";
     const circle = list === "defederated" ? defed : blocked;
     if (has(circle, id)) continue;
     await addMember(list, {
