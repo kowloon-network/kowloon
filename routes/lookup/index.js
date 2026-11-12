@@ -22,6 +22,7 @@ import sanitizeObject from "#methods/sanitize/object.js";
 import { getViewerContext } from "#methods/visibility/context.js";
 import { canSeeObject } from "#methods/visibility/helpers.js";
 import { lookupRateLimiter } from "../middleware/rateLimiter.js";
+import { isDefederated } from "#methods/moderation/federationPolicy.js";
 
 const router = express.Router({ mergeParams: true });
 
@@ -34,6 +35,14 @@ router.get(
       if (!id) {
         setStatus(400);
         set("error", "Missing 'id' query parameter");
+        return;
+      }
+
+      // Nothing from a defederated server, cached or fetched
+      // (methods/moderation/federationPolicy.js).
+      if (await isDefederated(id)) {
+        setStatus(404);
+        set("error", "Not found");
         return;
       }
 
