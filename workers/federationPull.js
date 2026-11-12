@@ -6,7 +6,8 @@
 import "dotenv/config";
 import mongoose from "mongoose";
 import { User, Circle, FederatedServer, Settings } from "#schema";
-import { loadSettings } from "#methods/settings/cache.js";
+import { getSetting, loadSettings } from "#methods/settings/cache.js";
+import { isDefederated } from "#methods/moderation/federationPolicy.js";
 import { getServerSettings } from "#methods/settings/schemaHelpers.js";
 import Kowloon from "#kowloon";
 import logger from "#methods/utils/logger.js";
@@ -85,8 +86,14 @@ async function buildPullParamsForServer(remoteDomain) {
     .lean();
   const activeOwners = new Set(owners.map((u) => u.id));
   // Blocked/Muted circles hold remote users too -- they are not follows.
+  // So do the server's own Blocked/Defederated lists -- moderation, not
+  // anyone's reading list.
   const excludedCircles = new Set(
-    owners.flatMap((u) => [u.circles?.blocked, u.circles?.muted]).filter(Boolean)
+    [
+      ...owners.flatMap((u) => [u.circles?.blocked, u.circles?.muted]),
+      getSetting("blockedCircle"),
+      getSetting("defederatedCircle"),
+    ].filter(Boolean)
   );
 
   for (const circle of circles) {
@@ -153,10 +160,10 @@ async function processCircleServerPulls() {
   logger.info(`federationPull: Circle-server pull — ${domainToUsers.size} server(s)`);
 
   for (const [domain, userIds] of domainToUsers.entries()) {
-    // Skip fully suspended servers. Blocked servers still get pulled — local
+    // Skip defederated servers. Blocked servers still get pulled — local
     // users who subscribed to them can still read their public content.
+    if (await isDefederated(domain)) continue;
     const serverRecord = await FederatedServer.findOne({ domain }).lean();
-    if (serverRecord?.status === "suspended") continue;
     if (serverRecord?.nextPullAt && serverRecord.nextPullAt > now) continue;
 
     logger.info(`federationPull: Pulling circle-server ${domain}`, { users: userIds.size });

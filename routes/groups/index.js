@@ -11,6 +11,7 @@ import { Group, FeedItems } from "#schema";
 import feedItemToPost from "#methods/feed/feedItemToPost.js";
 import { getSetting } from "#methods/settings/cache.js";
 import { toRSS } from "#methods/rss/index.js";
+import { excludeBlockedMuted } from "#methods/visibility/context.js";
 
 const router = express.Router({ mergeParams: true });
 
@@ -28,7 +29,9 @@ router.get("/:id/posts", async (req, res, next) => {
   const groupId = decodeURIComponent(req.params.id);
   const group = await Group.findOne({ id: groupId, to: "@public", deletedAt: null }).lean();
   if (!group) return res.status(404).json({ error: "Not found" });
-  const docs = await FeedItems.find({ group: groupId, tombstoned: { $ne: true }, objectType: "Post" })
+  const docs = await FeedItems.find(
+    await excludeBlockedMuted({ group: groupId, tombstoned: { $ne: true }, objectType: "Post" }, null)
+  )
     .sort({ publishedAt: -1 }).limit(20).lean();
   const proto = req.headers["x-forwarded-proto"] || "https";
   const base = `${proto}://${domain}`;

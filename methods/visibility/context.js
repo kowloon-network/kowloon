@@ -1,6 +1,7 @@
 // #methods/visibility/context.js
 import { Circle, Group, User } from "#schema";
 import { escapeRegExp } from "./utils.js";
+import { getBlockSets } from "#methods/moderation/blocklist.js";
 
 export function domainOf(userId) {
   return typeof userId === "string" ? userId.split("@").pop() : undefined;
@@ -27,15 +28,41 @@ async function loadCircleMembers(circleId) {
   return splitMembers(circle?.members);
 }
 
+// What the server's own lists hide from every reader
+// (methods/moderation/federationPolicy.js): everything from a defederated
+// server, and people on the server Blocked list -- except, for a member who
+// keeps one of those people in their own circles, that person ("we don't
+// control who our users read"). Read-side only, so it's folded into the
+// muted sets: blocking an interaction is the inbox's job, not this.
+async function serverHiddenSets(viewerId) {
+  const { blockedActors, defederatedServers } = await getBlockSets();
+  const actorIds = new Set(blockedActors);
+  if (viewerId && actorIds.size) {
+    const own = await Circle.find({ actorId: viewerId, deletedAt: null, "members.id": { $in: [...actorIds] } })
+      .select("id members.id")
+      .lean();
+    const viewer = await User.findOne({ id: viewerId }).select("circles.blocked circles.muted").lean();
+    const notReading = new Set([viewer?.circles?.blocked, viewer?.circles?.muted].filter(Boolean));
+    for (const c of own) {
+      if (notReading.has(c.id)) continue;
+      for (const m of c.members || []) actorIds.delete(m.id);
+    }
+  }
+  return { actorIds, domains: new Set(defederatedServers) };
+}
+
 // Blocked + muted actor ids and server domains for a viewer, kept separate
 // (block = hard reject on interaction, mute = soft hide only — callers that
 // need block-only semantics, like authorizeInteraction, must not union these).
+// The server's own lists are added to the muted sets (see serverHiddenSets),
+// for signed-out readers too.
 export async function getExclusionSets(viewerId) {
+  const hidden = await serverHiddenSets(viewerId);
   const empty = {
     blockedActorIds: new Set(),
     blockedDomains: new Set(),
-    mutedActorIds: new Set(),
-    mutedDomains: new Set(),
+    mutedActorIds: hidden.actorIds,
+    mutedDomains: hidden.domains,
   };
   if (!viewerId) return empty;
   const viewer = await User.findOne({ id: viewerId }).select("circles.blocked circles.muted").lean();
@@ -47,8 +74,8 @@ export async function getExclusionSets(viewerId) {
   return {
     blockedActorIds: blocked.actorIds,
     blockedDomains: blocked.domains,
-    mutedActorIds: muted.actorIds,
-    mutedDomains: muted.domains,
+    mutedActorIds: new Set([...muted.actorIds, ...hidden.actorIds]),
+    mutedDomains: new Set([...muted.domains, ...hidden.domains]),
   };
 }
 
@@ -79,7 +106,6 @@ export function applyActorExclusion(filter, { ids = new Set(), domainRegex = nul
 // Convenience one-shot for the common case: hide everything the viewer has
 // blocked OR muted (individuals and whole servers) from a read-time filter.
 export async function excludeBlockedMuted(filter, viewerId) {
-  if (!viewerId) return filter;
   const { blockedActorIds, blockedDomains, mutedActorIds, mutedDomains } = await getExclusionSets(viewerId);
   const ids = new Set([...blockedActorIds, ...mutedActorIds]);
   ids.delete(viewerId);
@@ -89,6 +115,7 @@ export async function excludeBlockedMuted(filter, viewerId) {
 
 export async function getViewerContext(viewerId) {
   if (!viewerId) {
+    const hidden = await getExclusionSets(null);
     return {
       isAuthenticated: false,
       viewerId: null,
@@ -97,8 +124,8 @@ export async function getViewerContext(viewerId) {
       groupIds: new Set(),
       blockedActorIds: new Set(),
       blockedDomains: new Set(),
-      mutedActorIds: new Set(),
-      mutedDomains: new Set(),
+      mutedActorIds: hidden.mutedActorIds,
+      mutedDomains: hidden.mutedDomains,
     };
   }
 

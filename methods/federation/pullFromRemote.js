@@ -21,6 +21,7 @@ import { getServerSettings } from "#methods/settings/schemaHelpers.js";
 import { fileIdFromValue } from "#methods/files/fileRef.js";
 import { hydrateRemoteFiles } from "#methods/files/hydrateRemoteFile.js";
 import { safeFetch } from "#methods/utils/safeUrl.js";
+import { isDefederated } from "#methods/moderation/federationPolicy.js";
 import signHttpRequest from "#methods/federation/signHttpRequest.js";
 import { sanitizeRemoteObject } from "#methods/utils/sanitizeRemote.js";
 
@@ -75,6 +76,11 @@ export default async function pullFromRemote({
   // `limit` in the window was lost forever. Now: page backwards with
   // `before=next` until a short page (or maxPages), and report the newest
   // publishedAt actually received so callers can use it as the next `since`.
+  // Never pull from a defederated server (methods/moderation/federationPolicy.js).
+  if (await isDefederated(remoteDomain)) {
+    return { items: [], error: "Server is defederated" };
+  }
+
   const allItems = [];
   const seenIds = new Set();
   let newestPublishedAt = null;

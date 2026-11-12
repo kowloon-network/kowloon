@@ -4,6 +4,7 @@
 import Outbox from "#schema/Outbox.js";
 import signHttpRequest from "./signHttpRequest.js";
 import log from "#methods/utils/logger.js";
+import { canDeliverTo } from "#methods/moderation/federationPolicy.js";
 
 // Configuration
 const CONFIG = {
@@ -121,6 +122,18 @@ async function sendToInbox(delivery, activity) {
 async function processDelivery(job, delivery) {
   // status/attempts/lastAttemptAt/leaseUntil were already set atomically by
   // claimDelivery(); this only computes the outcome.
+
+  // A recipient blocked or defederated after this job was queued.
+  if (!(await canDeliverTo(delivery))) {
+    delivery.status = "skipped";
+    delivery.error = {
+      message: "Recipient is blocked or defederated",
+      code: "BLOCKED",
+      class: "PermanentFailure",
+    };
+    delivery.nextAttemptAt = null;
+    return delivery;
+  }
 
   // Send to inbox
   const result = await sendToInbox(delivery, job.activity);

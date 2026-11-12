@@ -8,6 +8,7 @@ import toMember from "#methods/parse/toMember.js";
 import createNotification from "#methods/notifications/create.js";
 import getMultiFederationTargets from "../utils/getMultiFederationTargets.js";
 import pullFromRemote from "#methods/federation/pullFromRemote.js";
+import { isDefederated } from "#methods/moderation/federationPolicy.js";
 import fetchRemoteServerProfile from "#methods/federation/fetchRemoteServerProfile.js";
 import { getServerActor } from "#methods/settings/schemaHelpers.js";
 import regenerateCircleIcon from "#methods/circles/regenerateCircleIcon.js";
@@ -201,6 +202,27 @@ export default async function Add(activity) {
     const resolved = (await Promise.all(objects.map(resolveActorToMember))).filter(Boolean);
 
     if (resolved.length === 0) return { activity, error: "Add: no valid members resolved" };
+
+    // Nobody from a defederated server goes in a circle -- that would start
+    // pulling from it -- except a person's own Blocked/Muted circles and the
+    // server's own lists (methods/moderation/federationPolicy.js).
+    const fromDefederated = [];
+    for (const m of resolved) {
+      if (m?.id && (await isDefederated(m.id))) fromDefederated.push(m.id);
+    }
+    if (fromDefederated.length && ownerType !== "Server") {
+      let suppressing = false;
+      if (ownerType === "User") {
+        const o = await User.findOne({ id: ownerId }).select("circles.blocked circles.muted").lean();
+        suppressing = activity.target === o?.circles?.blocked || activity.target === o?.circles?.muted;
+      }
+      if (!suppressing) {
+        return {
+          activity,
+          error: "This server has defederated from theirs, so they can't be added to a circle.",
+        };
+      }
+    }
 
     // Dedupe the submitted list itself (the same id twice in one Add used to
     // be pushed twice), then push each member with a per-id $ne guard so a

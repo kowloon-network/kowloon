@@ -13,7 +13,7 @@ import { Reply, Post } from "#schema";
 import { activityStreamsCollection } from "../utils/oc.js";
 import { getSetting } from "#methods/settings/cache.js";
 import kowloonId from "#methods/parse/kowloonId.js";
-import { excludeBlockedMuted } from "#methods/visibility/context.js";
+import { excludeBlockedMuted, getExclusionSets } from "#methods/visibility/context.js";
 import { enrichAttachments } from "#methods/files/enrichAttachments.js";
 import { authorizeInteraction } from "#methods/feed/visibility.js";
 import { safeFetch } from "#methods/utils/safeUrl.js";
@@ -117,9 +117,19 @@ async function proxyToRemote(ctx, remoteDomain, postId) {
     const body = await response.json();
     // SECURITY (2026-11-09): this is a peer's HTML relayed to our users'
     // browsers -- sanitize every reply's HTML fields before passing it on.
+    // Same hiding as local threads: the viewer's blocks/mutes plus whatever
+    // the server's own lists hide (methods/visibility/context.js).
+    const ex = await getExclusionSets(ctx.user?.id || null);
+    const hiddenIds = new Set([...ex.blockedActorIds, ...ex.mutedActorIds]);
+    const hiddenDomains = new Set([...ex.blockedDomains, ...ex.mutedDomains]);
+    const shown = (r) => {
+      const a = typeof r?.actorId === "string" ? r.actorId : null;
+      if (!a) return true;
+      return !hiddenIds.has(a) && !hiddenDomains.has(a.slice(a.lastIndexOf("@") + 1).toLowerCase());
+    };
     if (body && typeof body === "object") {
       for (const k of ["orderedItems", "items"]) {
-        if (Array.isArray(body[k])) body[k] = body[k].map(sanitizeRemoteObject);
+        if (Array.isArray(body[k])) body[k] = body[k].filter(shown).map(sanitizeRemoteObject);
       }
     }
     for (const [key, value] of Object.entries(body || {})) {

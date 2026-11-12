@@ -31,7 +31,7 @@
 // and is kept in step here. Membership is also cached in memory (short TTL,
 // since the app and the workers are separate processes) for the inbox check.
 
-import { Circle, FederatedServer, Settings, User } from "#schema";
+import { Circle, FederatedServer, OAuthRefreshToken, Settings, User, VisitingIdentity } from "#schema";
 import { getSetting } from "#methods/settings/cache.js";
 import deleteAccountCascade from "#methods/users/deleteAccountCascade.js";
 import isServerAdmin from "#methods/auth/isServerAdmin.js";
@@ -332,8 +332,15 @@ export async function addToList({ list, target: rawTarget, summary, confirmBan =
     await removeMember(other, target.id);
     await addMember(list, member);
     // Keep the fast per-server lookup in step.
-    if (list === "defederated") await FederatedServer.suspendServer(target.domain, member.summary);
-    else await FederatedServer.blockServer(target.domain, member.summary);
+    if (list === "defederated") {
+      await FederatedServer.suspendServer(target.domain, member.summary);
+      // End visits from there and our members' sign-ins to there.
+      await VisitingIdentity.deleteMany({ homeDomain: target.domain });
+      await OAuthRefreshToken.updateMany(
+        { clientDomain: target.domain, revokedAt: null },
+        { revokedAt: new Date() }
+      );
+    } else await FederatedServer.blockServer(target.domain, member.summary);
     invalidateBlocklistCache();
     return { member, banned: false };
   }
@@ -376,6 +383,7 @@ export async function addToList({ list, target: rawTarget, summary, confirmBan =
   // A remote person.
   const member = await memberFor(target, summary);
   await addMember("blocked", member);
+  await VisitingIdentity.deleteMany({ userId: target.id }); // ends any visit
   invalidateBlocklistCache();
   return { member, banned: false };
 }

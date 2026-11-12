@@ -8,6 +8,7 @@ import { FeedItems } from "#schema";
 import feedItemToPost from "#methods/feed/feedItemToPost.js";
 import { getSetting } from "#methods/settings/cache.js";
 import { toRSS } from "#methods/rss/index.js";
+import { excludeBlockedMuted } from "#methods/visibility/context.js";
 
 const router = express.Router({ mergeParams: true });
 
@@ -26,7 +27,9 @@ router.get("/", async (req, res, next) => {
   if (!("rss" in req.query)) return next();
   const domain = getSetting("domain");
   const siteName = getSetting("profile")?.name || "Kowloon";
-  const docs = await FeedItems.find({ to: "public", tombstoned: { $ne: true }, objectType: "Post" })
+  const docs = await FeedItems.find(
+    await excludeBlockedMuted({ to: "public", tombstoned: { $ne: true }, objectType: "Post" }, null)
+  )
     .sort({ publishedAt: -1 }).limit(20).lean();
   const proto = req.headers["x-forwarded-proto"] || "https";
   const base = `${proto}://${domain}`;

@@ -5,6 +5,7 @@ import crypto from "crypto";
 import Outbox from "#schema/Outbox.js";
 import resolveAudience from "./resolveAudience.js";
 import log from "#methods/utils/logger.js";
+import { canDeliverTo } from "#methods/moderation/federationPolicy.js";
 
 /**
  * Generate a unique idempotency key for a delivery
@@ -75,6 +76,20 @@ export default async function enqueueOutbox({
   } else {
     resolved = await resolveAudience(activity);
   }
+
+  // Never deliver to a defederated server or a person on the server
+  // Blocked list (methods/moderation/federationPolicy.js).
+  const allowed = [];
+  for (const r of resolved) {
+    if (await canDeliverTo(r)) allowed.push(r);
+  }
+  if (allowed.length !== resolved.length) {
+    log.info("Outbox: dropped blocked/defederated recipients", {
+      activityId,
+      dropped: resolved.length - allowed.length,
+    });
+  }
+  resolved = allowed;
 
   if (resolved.length === 0) {
     log.info("No remote recipients to federate to", {

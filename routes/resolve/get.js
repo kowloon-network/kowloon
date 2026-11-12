@@ -6,6 +6,7 @@ import sanitizeObject from "#methods/sanitize/object.js";
 import { getViewerContext } from "#methods/visibility/context.js";
 import { canSeeObject } from "#methods/visibility/helpers.js";
 import Kowloon from "#kowloon";
+import { isPersonBlocked } from "#methods/moderation/federationPolicy.js";
 
 export default route(async ({ req, query, set, setStatus }) => {
   const { id, actorId } = query;
@@ -27,8 +28,19 @@ export default route(async ({ req, query, set, setStatus }) => {
       });
 
       if (sig.ok) {
+        // A person on our Blocked list reads nothing beyond what's public
+        // to anyone (methods/moderation/federationPolicy.js).
+        if (await isPersonBlocked(actorId)) {
+          setStatus(403);
+          set("error", "You are blocked on this server");
+          return;
+        }
         // HTTP signature verified - use the actorId as viewerId
         viewerId = actorId;
+      } else if (sig.status === 403) {
+        setStatus(403);
+        set("error", sig.error);
+        return;
       } else {
         // Signature verification failed - log but continue as anonymous
         console.warn("RESOLVE: HTTP signature verification failed for actorId:", actorId, sig.error);

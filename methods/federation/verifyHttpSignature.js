@@ -1,4 +1,5 @@
 // /methods/federation/verifyHttpSignature.js
+import { isDefederated } from "#methods/moderation/federationPolicy.js";
 import crypto from "crypto";
 import logger from "#methods/utils/logger.js";
 import { safeFetch } from "#methods/utils/safeUrl.js";
@@ -168,6 +169,13 @@ export default async function verifyHttpSignature(
     parseSignatureHeader(sigHeader);
   if (!keyId || !signature)
     return { ok: false, error: "Invalid Signature header" };
+
+  // A defederated server gets nothing that needs a signature -- refused
+  // before we'd fetch its key, so we never contact it either
+  // (methods/moderation/federationPolicy.js).
+  if (await isDefederated(keyId)) {
+    return { ok: false, status: 403, error: "This server is not federating with your server" };
+  }
 
   // Headers covered by the signature
   const headersList = (headers || "(request-target) host date digest")

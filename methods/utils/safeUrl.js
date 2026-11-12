@@ -160,6 +160,28 @@ export class UnsafeUrlError extends Error {
   }
 }
 
+// Nothing is ever fetched from a server on the Defederated list -- link
+// lookups, thread hydration, keys, media, pulls all come through here
+// (methods/moderation/federationPolicy.js). Lazy import: this module is
+// low-level and loaded long before the database is.
+export class DefederatedError extends Error {
+  constructor(url) {
+    super(`Not fetching from a defederated server: ${url}`);
+    this.name = 'DefederatedError';
+    this.code = 'DEFEDERATED';
+    this.status = 403;
+  }
+}
+
+async function isDefederatedUrl(url) {
+  try {
+    const { isDefederated } = await import('#methods/moderation/federationPolicy.js');
+    return await isDefederated(url);
+  } catch {
+    return false; // lists unavailable (no DB yet, e.g. a script): don't block
+  }
+}
+
 const DEFAULT_TIMEOUT_MS = 10_000;
 const MAX_REDIRECTS = 5;
 
@@ -188,6 +210,7 @@ export async function safeFetch(url, opts = {}) {
 
   for (let hop = 0; ; hop++) {
     if (!(await isSafeUrl(current))) throw new UnsafeUrlError(current);
+    if (await isDefederatedUrl(current)) throw new DefederatedError(current);
 
     const res = await fetch(current, { ...init, redirect: 'manual', signal: combined });
     const location = res.headers.get('location');

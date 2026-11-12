@@ -5,7 +5,13 @@ export function buildVisibilityQuery(ctx) {
   const base = { deletedAt: null };
 
   if (!ctx?.isAuthenticated) {
-    return { ...base, to: "@public" };
+    // Signed-out readers still don't see what the server's lists hide.
+    const filter = { ...base, to: "@public" };
+    applyActorExclusion(filter, {
+      ids: new Set(ctx?.mutedActorIds ?? []),
+      domainRegex: domainExclusionRegex(new Set(ctx?.mutedDomains ?? [])),
+    });
+    return filter;
   }
 
   const or = [];

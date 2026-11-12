@@ -14,6 +14,7 @@ import signHttpRequest from "#methods/federation/signHttpRequest.js";
 import verifyUserJwt from "#methods/auth/verifyUserJwt.js";
 import { VisitingIdentity } from "#schema";
 import { mintVisitingSessionToken } from "#methods/oauth/tokens.js";
+import { isDefederated, isPersonBlocked } from "#methods/moderation/federationPolicy.js";
 
 export default route(
   async ({ body, set, setStatus }) => {
@@ -38,6 +39,14 @@ export default route(
     ) {
       setStatus(400);
       set("error", "Invalid homeDomain");
+      return;
+    }
+
+    // Visitors from a defederated server can't sign in here; checked before
+    // we contact their server at all (methods/moderation/federationPolicy.js).
+    if (await isDefederated(home)) {
+      setStatus(403);
+      set("error", "This server doesn't federate with yours, so you can't visit it.");
       return;
     }
     const redirectUri = `https://${ownDomain}/oauth/callback`;
@@ -87,6 +96,12 @@ export default route(
     if (!remoteUser?.id || claims.sub !== remoteUser.id) {
       setStatus(400);
       set("error", "Access token subject mismatch");
+      return;
+    }
+
+    if (await isPersonBlocked(remoteUser.id)) {
+      setStatus(403);
+      set("error", "Your account is blocked on this server.");
       return;
     }
 

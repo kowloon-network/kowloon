@@ -13,6 +13,7 @@ import route from "../utils/route.js";
 import { Activity, Circle, FeedItems, Post } from "#schema";
 import { getSetting } from "#methods/settings/cache.js";
 import verifyHttpSignature from "#methods/federation/verifyHttpSignature.js";
+import { isDefederated, isPersonBlocked } from "#methods/moderation/federationPolicy.js";
 
 // A bare-server from entry looks like "@kwln2.local" (one @ at position 0, no second @)
 // A user from entry looks like "@alice@kwln2.local" (two @s)
@@ -54,8 +55,18 @@ export default route(
         set("error", "Invalid signer");
         return;
       }
+      // A defederated server reads nothing; people on our Blocked list are
+      // dropped from `to` (methods/moderation/federationPolicy.js).
+      if (await isDefederated(signerDomain)) {
+        setStatus(403);
+        set("error", "This server is not federating with your server");
+        return;
+      }
       const froms = asStrings(query.from).filter((f) => domainOf(f) === ownDomain);
-      const tos = asStrings(query.to).filter((t) => domainOf(t) === signerDomain);
+      const tos = [];
+      for (const t of asStrings(query.to)) {
+        if (domainOf(t) === signerDomain && !(await isPersonBlocked(t))) tos.push(t);
+      }
       if (froms.length === 0 || tos.length === 0) {
         set("@context", "https://www.w3.org/ns/activitystreams");
         set("type", "OrderedCollection");

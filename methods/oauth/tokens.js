@@ -3,6 +3,7 @@
 // Access tokens reuse the exact signing shape methods/generate/token.js
 // already uses (RS256, same kid derivation) so they verify via the same
 // JWKS this server publishes at /.well-known/jwks.json.
+import { isDefederated } from "#methods/moderation/federationPolicy.js";
 import crypto from "crypto";
 import { SignJWT, importPKCS8 } from "jose";
 import getSettings from "#methods/settings/get.js";
@@ -155,6 +156,8 @@ export async function revokeGrantsForDomain({ userId, clientDomain }) {
 // server-block shorthand ServerMoreMenu.jsx already writes via addToCircle.
 export async function isDomainBlockedByUser(userId, domain) {
   if (!userId || !domain) return false;
+  // The server defederating from that domain overrides every user's grants.
+  if (await isDefederated(domain)) return true;
   const owner = await User.findOne({ id: userId }).select("circles.blocked").lean();
   if (!owner?.circles?.blocked) return false;
   const hit = await Circle.findOne({

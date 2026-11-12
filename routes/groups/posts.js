@@ -12,6 +12,7 @@ import { enrichAttachments } from "#methods/files/enrichAttachments.js";
 import { getSetting } from "#methods/settings/cache.js";
 import isLocalDomain from "#methods/parse/isLocalDomain.js";
 import kowloonId from "#methods/parse/kowloonId.js";
+import { excludeBlockedMuted } from "#methods/visibility/context.js";
 
 export default route(async ({ req, params, query, user, set, setStatus }) => {
   const groupId = decodeURIComponent(params.id);
@@ -79,6 +80,9 @@ export default route(async ({ req, params, query, user, set, setStatus }) => {
     filter["object.attachments.kind"] = { $in: kinds };
   }
   if (query.since) filter.publishedAt = { $gte: new Date(query.since) };
+
+  // The viewer's blocks/mutes, plus whatever the server's lists hide.
+  await excludeBlockedMuted(filter, user?.id || null);
 
   const [docs, total] = await Promise.all([
     FeedItems.find(filter).sort({ publishedAt: -1 }).skip(skip).limit(limit).lean(),

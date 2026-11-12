@@ -5,6 +5,7 @@ import {
   enrichWithCapabilities,
 } from "#methods/feed/visibility.js";
 import { enrichAttachments } from "#methods/files/enrichAttachments.js";
+import { isDefederated } from "#methods/moderation/federationPolicy.js";
 
 const VISIBILITY_MAP = { public: "Public", server: "Server", audience: "Audience" };
 
@@ -19,7 +20,8 @@ export default route(async ({ req, params, set, setStatus }) => {
     tombstoned: { $ne: true },
   }).lean();
 
-  if (!feedCacheItem) {
+  // Nothing from a defederated server is shown (federationPolicy.js).
+  if (!feedCacheItem || (await isDefederated(feedCacheItem.actorId))) {
     setStatus(404);
     set("error", "Post not found");
     return;

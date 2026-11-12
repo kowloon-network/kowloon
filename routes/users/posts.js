@@ -12,6 +12,7 @@ import { enrichAttachments } from "#methods/files/enrichAttachments.js";
 import { getSetting } from "#methods/settings/cache.js";
 import isLocalDomain from "#methods/parse/isLocalDomain.js";
 import kowloonId from "#methods/parse/kowloonId.js";
+import { isDefederated } from "#methods/moderation/federationPolicy.js";
 
 export default route(async ({ req, params, query, user, set }) => {
   const userId = decodeURIComponent(params.id);
@@ -70,6 +71,11 @@ export default route(async ({ req, params, query, user, set }) => {
     query.sort === "top"
       ? { "object.reactCount": -1, publishedAt: -1 }
       : { publishedAt: -1 };
+
+  // Nothing from a defederated server is shown, even on its people's own
+  // pages (methods/moderation/federationPolicy.js). A person on the server
+  // Blocked list stays readable here -- members may still read them.
+  if (await isDefederated(userId)) filter.actorId = { $in: [] };
 
   const [docs, total] = await Promise.all([
     FeedItems.find(filter).sort(sortSpec).skip(skip).limit(limit).lean(),

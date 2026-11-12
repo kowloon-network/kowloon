@@ -5,6 +5,7 @@
 // navigate to next. Deliberately a JSON POST, not a raw redirecting GET — the
 // frontend (a normal SPA route) owns navigation, consistent with the rest of
 // this app's route()-wrapped JSON API.
+import { isDefederated } from "#methods/moderation/federationPolicy.js";
 import route from "../utils/route.js";
 import crypto from "crypto";
 import { OAuthCode } from "#schema";
@@ -39,6 +40,14 @@ export default route(async ({ body, user, set, setStatus }) => {
   if (parsedRedirect.protocol !== "https:" && process.env.NODE_ENV === "production") {
     setStatus(400);
     set("error", "redirectUri must be https");
+    return;
+  }
+
+  // No signing in to a defederated server with your account here
+  // (methods/moderation/federationPolicy.js).
+  if (await isDefederated(clientDomain)) {
+    setStatus(403);
+    set("error", "This server doesn't federate with that one, so you can't sign in there with your account.");
     return;
   }
 
