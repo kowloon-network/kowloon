@@ -230,24 +230,9 @@ FederatedServerSchema.statics.recordPullError = async function (domain, error) {
   );
 };
 
-// Returns servers eligible for content pulls.
-// "blocked" servers are included — local users can still subscribe to them.
-// "suspended" and "unreachable" servers are excluded.
-FederatedServerSchema.statics.getServersReadyForPull = async function (limit = 10) {
-  const now = new Date();
-  return this.find({
-    status: { $in: ["active", "slow", "blocked"] },
-    nextPullAt: { $lte: now },
-    $or: [
-      { localFollowerCount: { $gt: 0 } },
-      { localMemberCount: { $gt: 0 } },
-      { localCircleFollowers: { $gt: 0 } },
-    ],
-  })
-    .sort({ nextPullAt: 1 })
-    .limit(limit)
-    .lean();
-};
+// Which servers are due a pull is worked out from members' circles in
+// workers/federationPull.js (getServersReadyForPull). The old static here
+// relied on the local*Count fields below, which nothing maintains.
 
 // ── Moderation ────────────────────────────────────────────────────────────────
 // Restored from git history (removed in 36af3a2c's dead-code pass, which noted

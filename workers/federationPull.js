@@ -118,6 +118,56 @@ async function buildPullParamsForServer(remoteDomain) {
 }
 
 /**
+ * Remote servers due a pull because some local member keeps a person from
+ * there in one of their circles.
+ *
+ * This used to be FederatedServer.getServersReadyForPull, which required
+ * localFollowerCount / localMemberCount / localCircleFollowers > 0 -- counters
+ * nothing ever wrote, so the scheduled pull of followed people never ran
+ * (found 2026-11-12). The circles themselves are the source of truth now.
+ * buildPullParamsForServer does the precise per-owner filtering (local,
+ * active, not a Blocked/Muted circle); this only finds candidate domains.
+ */
+async function getServersReadyForPull(limit) {
+  const { domain: ourDomain } = getServerSettings();
+  const rows = await Circle.aggregate([
+    {
+      $match: {
+        deletedAt: null,
+        // Circles owned by our own people -- not cached remote circles, not
+        // groups, not the server's own Blocked/Defederated lists.
+        actorId: { $regex: `^@[^@]+@${ourDomain.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, $options: "i" },
+        // Blocked/Muted hold people you're NOT reading.
+        $nor: [{ type: "System", name: { $in: ["Blocked", "Muted"] } }],
+        "members.id": { $regex: "^@[^@]+@[^@]+$" },
+      },
+    },
+    { $project: { ids: "$members.id" } },
+    { $unwind: "$ids" },
+    { $match: { ids: { $regex: "^@[^@]+@[^@]+$" } } },
+    { $group: { _id: { $toLower: { $arrayElemAt: [{ $split: ["$ids", "@"] }, 2] } } } },
+  ]);
+  const domains = rows.map((r) => r._id).filter((d) => d && d !== ourDomain);
+  if (!domains.length) return [];
+
+  const now = new Date();
+  const records = await FederatedServer.find({ domain: { $in: domains } }).lean();
+  const byDomain = new Map(records.map((r) => [r.domain, r]));
+  const due = [];
+  for (const domain of domains) {
+    if (await isDefederated(domain)) continue;
+    const rec = byDomain.get(domain);
+    if (rec?.status === "suspended") continue;
+    // Unreachable servers stay in: recordPullError's backoff (max 2h)
+    // spaces the retries, and they recover by themselves when back.
+    if (rec?.nextPullAt && rec.nextPullAt > now) continue;
+    due.push(rec || { domain });
+  }
+  due.sort((a, b) => (a.nextPullAt ? +a.nextPullAt : 0) - (b.nextPullAt ? +b.nextPullAt : 0));
+  return due.slice(0, limit);
+}
+
+/**
  * Pull content from servers that users have added directly to circles as bare @domain entries.
  *
  * This is how the "subscribe to a whole server" feature works: a user adds e.g.
@@ -226,8 +276,7 @@ async function processCircleServerPulls() {
 async function processBatch() {
   const now = new Date();
 
-  // Get servers ready to be polled using new FederatedServer model
-  const servers = await FederatedServer.getServersReadyForPull(BATCH_SIZE);
+  const servers = await getServersReadyForPull(BATCH_SIZE);
 
   if (servers.length === 0) {
     logger.info("federationPull: No servers ready to poll");
@@ -261,7 +310,8 @@ async function processBatch() {
               nextPullAt: new Date(Date.now() + 3600000), // 1 hour
               lastPullAttemptedAt: now,
             },
-          }
+          },
+          { upsert: true }
         );
         continue;
       }
@@ -274,7 +324,11 @@ async function processBatch() {
         remoteDomain,
         from: [...params.authors, ...params.groups],
         to: params.members,
-        since: server.pullCursor ?? server.lastPulledAt,
+        // First pull from a server: the last 30 days, same as adding someone.
+        since:
+          server.pullCursor ??
+          server.lastPulledAt ??
+          new Date(Date.now() - 30 * 24 * 60 * 60 * 1000),
         limit: 100,
       });
       const responseTimeMs = Date.now() - startTime;
