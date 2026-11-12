@@ -186,7 +186,6 @@ async function processCircleServerPulls() {
               lastPulledAt: now,
               lastPullAttemptedAt: now,
               pullErrorCount: 0,
-              status: "active",
               nextPullAt: new Date(now.getTime() + POLL_INTERVAL_MS),
               ...(result.newestPublishedAt ? { serverPullCursor: result.newestPublishedAt } : {}),
             },
@@ -194,6 +193,7 @@ async function processCircleServerPulls() {
           },
           { upsert: true }
         );
+        await FederatedServer.restoreHealthyStatus(domain);
         logger.info(`federationPull: Circle-server ${domain} complete`, { items: itemCount, responseTimeMs });
       } else {
         await FederatedServer.findOneAndUpdate(

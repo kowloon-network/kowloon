@@ -12,6 +12,7 @@ import sanitizeHtml from "#methods/utils/sanitize.js";
 import { getServerSettings } from "#methods/settings/schemaHelpers.js";
 import logger from "#methods/utils/logger.js";
 import parseServerDomain from "#methods/parse/serverDomain.js";
+import { getBlockSets } from "#methods/moderation/blocklist.js";
 
 function stripHtml(str) {
   if (!str) return null;
@@ -35,12 +36,17 @@ export default async function fetchRemoteServerProfile(domain, { force = false, 
     return { server: null, error: "Cannot fetch profile for own server" };
   }
 
+  // Never contact a defederated server, forced refresh or not. The
+  // Defederated list is the source of truth; status is checked too in case
+  // the list cache is a few seconds behind.
+  const existing = await FederatedServer.findOne({ domain }).lean();
+  const { defederatedServers } = await getBlockSets();
+  if (defederatedServers.has(domain) || existing?.status === "suspended") {
+    return { server: null, error: "Server is defederated" };
+  }
+
   // Skip if cached data is fresh enough
   if (!force) {
-    const existing = await FederatedServer.findOne({ domain }).lean();
-    if (existing?.status === "suspended") {
-      return { server: null, error: "Server is suspended" };
-    }
     if (existing?.profileFetchedAt) {
       const ageMs = Date.now() - new Date(existing.profileFetchedAt).getTime();
       if (ageMs < staleSecs * 1000) {
@@ -127,9 +133,8 @@ export default async function fetchRemoteServerProfile(domain, { force = false, 
       groupsFetchedAt: now,
       cachedPages,
       pagesFetchedAt: now,
-
-      // Mark active if we could reach it
-      status: "active",
+      // status is not written here: reaching a server clears slow/unreachable
+      // (restoreHealthyStatus below) but never an admin's block.
     };
 
     // Remove undefined fields so $set doesn't null them out
@@ -137,6 +142,7 @@ export default async function fetchRemoteServerProfile(domain, { force = false, 
       if (update[key] === undefined) delete update[key];
     }
 
+    await FederatedServer.restoreHealthyStatus(domain);
     const server = await FederatedServer.findOneAndUpdate(
       { domain },
       {

@@ -170,7 +170,8 @@ FederatedServerSchema.statics.recordPullSuccess = async function (domain, itemCo
     lastPullError: null,
     pullIntervalMs,
     nextPullAt: new Date(now.getTime() + pullIntervalMs),
-    status: "active",
+    // status deliberately not written here: a successful pull only clears
+    // health problems (restoreHealthyStatus below), never a block.
   };
   // Advance the pull cursor only to what we actually received; with no new
   // items it stays put so nothing in the window is skipped.
@@ -184,6 +185,19 @@ FederatedServerSchema.statics.recordPullSuccess = async function (domain, itemCo
   }
 
   await this.findOneAndUpdate({ domain }, update, { upsert: true });
+  await this.restoreHealthyStatus(domain);
+};
+
+// A server we reached again goes back to "active" -- but only from a health
+// status (slow/unreachable). Blocked and suspended are moderation decisions
+// made by an admin (methods/moderation/blocklist.js) and are never undone by
+// a pull or a profile fetch.
+FederatedServerSchema.statics.restoreHealthyStatus = async function (domain) {
+  if (!domain) return;
+  await this.updateOne(
+    { domain, status: { $in: ["slow", "unreachable"] } },
+    { $set: { status: "active" } }
+  );
 };
 
 FederatedServerSchema.statics.recordPullError = async function (domain, error) {
@@ -252,6 +266,9 @@ FederatedServerSchema.statics.blockServer = async function (domain, reason) {
       status: "blocked",
       blockedAt: new Date(),
       blockedReason: reason,
+      // A server is on one list at a time (see blocklist.js).
+      suspendedAt: null,
+      suspendedReason: null,
       // nextPullAt intentionally untouched — local subscribers still get content
     },
     { upsert: true }
@@ -278,6 +295,8 @@ FederatedServerSchema.statics.suspendServer = async function (domain, reason) {
       status: "suspended",
       suspendedAt: new Date(),
       suspendedReason: reason,
+      blockedAt: null,
+      blockedReason: null,
       nextPullAt: null,
     },
     { upsert: true }

@@ -387,9 +387,10 @@ export async function removeFromList({ list, id: rawId }) {
   const removed = await removeMember(list, target.id);
   if (!removed) throw new BlocklistError("That isn't on the list", 404);
   if (target.kind === "server") {
-    const fs = await FederatedServer.findOne({ domain: target.domain }).select("status").lean();
-    if (fs?.status === "suspended") await FederatedServer.unsuspendServer(target.domain);
-    else if (fs?.status === "blocked") await FederatedServer.unblockServer(target.domain);
+    // Clear both, whatever status says: blockedAt/suspendedAt are what the
+    // startup sync (migrateServerBlocks) reads to restore lost blocks.
+    await FederatedServer.unsuspendServer(target.domain);
+    await FederatedServer.unblockServer(target.domain);
   }
   invalidateBlocklistCache();
   return target.id;
@@ -439,19 +440,40 @@ export async function getLists() {
   return out;
 }
 
-// One-time / startup sync: any server already blocked or suspended via the
-// old Moderation > Servers records gets a matching circle entry.
+// Startup sync, both directions.
+//
+// 1. Any server blocked or suspended via the old Moderation > Servers records
+//    gets a matching circle entry. blockedAt/suspendedAt count too: before
+//    2026-11-12 a successful pull or profile fetch reset status to "active"
+//    without clearing them, so they are the surviving record of a block the
+//    bug silently undid. (unblockServer/unsuspendServer clear them, so a real
+//    unblock is never resurrected.)
+// 2. Every server on either list gets the matching FederatedServer status,
+//    which the older enforcement paths still read.
 export async function migrateServerBlocks() {
-  const docs = await FederatedServer.find({ status: { $in: ["blocked", "suspended"] } })
-    .select("domain name profile status blockedReason suspendedReason")
+  const docs = await FederatedServer.find({
+    $or: [
+      { status: { $in: ["blocked", "suspended"] } },
+      { blockedAt: { $ne: null } },
+      { suspendedAt: { $ne: null } },
+    ],
+  })
+    .select("domain name profile status blockedAt suspendedAt blockedReason suspendedReason")
     .lean();
+  const added = await addMissingServerEntries(docs);
+  await syncServerStatuses();
+  return added;
+}
+
+async function addMissingServerEntries(docs) {
   if (!docs.length) return 0;
   const [blocked, defed] = await Promise.all([getListCircle("blocked"), getListCircle("defederated")]);
   const has = (c, id) => (c.members || []).some((m) => m.id === id);
   let added = 0;
   for (const d of docs) {
     const id = `@${d.domain}`;
-    const list = d.status === "suspended" ? "defederated" : "blocked";
+    if (has(blocked, id) || has(defed, id)) continue;
+    const list = d.status === "suspended" || d.suspendedAt ? "defederated" : "blocked";
     const circle = list === "defederated" ? defed : blocked;
     if (has(circle, id)) continue;
     await addMember(list, {
@@ -460,10 +482,29 @@ export async function migrateServerBlocks() {
       name: d.profile?.name || d.name || d.domain,
       url: `https://${d.domain}`,
       server: id,
-      summary: cleanSummary(d.status === "suspended" ? d.suspendedReason : d.blockedReason),
+      summary: cleanSummary(list === "defederated" ? d.suspendedReason : d.blockedReason),
     });
     added++;
   }
   invalidateBlocklistCache();
   return added;
+}
+
+// Make FederatedServer.status match the lists: listed servers get
+// blocked/suspended; a server marked blocked/suspended but on neither list
+// is left alone here (step 1 above has just listed it).
+async function syncServerStatuses() {
+  const { blockedServers, defederatedServers } = await getBlockSets();
+  for (const domain of defederatedServers) {
+    await FederatedServer.updateOne(
+      { domain, status: { $ne: "suspended" } },
+      { $set: { status: "suspended", nextPullAt: null } }
+    );
+  }
+  for (const domain of blockedServers) {
+    await FederatedServer.updateOne(
+      { domain, status: { $nin: ["blocked", "suspended"] } },
+      { $set: { status: "blocked" } }
+    );
+  }
 }
