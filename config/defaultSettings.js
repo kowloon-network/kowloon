@@ -364,6 +364,22 @@ const defaultSettings = (ctx) => {
       },
     },
 
+    // Automatic backups -- off by default; an admin turns them on in
+    // Settings -> Maintenance (methods/backup/manage.js). They use disk
+    // space, so it's the admin's (or the host's) call.
+    autoBackup: {
+      value: { database: "off", full: "off", keep: 7, hour: 3 },
+      summary: "Automatic backups: how often to back up the database and everything (off, daily, weekly), how many of each to keep, and the hour (UTC) they run.",
+      to: "@admin",
+      canEdit: "@admin",
+      ui: {
+        type: "json",
+        label: "Automatic Backups",
+        group: "maintenance",
+        order: 2,
+      },
+    },
+
     // ── Media processing ─────────────────────────────────────────────────────
     mediaProcessor: {
       value: 'local',

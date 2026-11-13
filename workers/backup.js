@@ -7,6 +7,10 @@ import mongoose from 'mongoose'
 import { BackupJob, Settings } from '#schema'
 import { loadSettings } from '#methods/settings/cache.js'
 import { runBackup, runRestore } from '#methods/backup/index.js'
+import {
+  queueDueBackups, pruneScheduled, notifyBackupFailed, getSchedule,
+  adoptOrphanArchives, keepFinishedBackups,
+} from '#methods/backup/manage.js'
 import logger from '#methods/utils/logger.js'
 import redactUri from '#methods/utils/redactUri.js'
 
@@ -104,14 +108,23 @@ async function pollOnce() {
     let result
     if (claimed.type === 'backup') {
       result = await runBackup(claimed, makeUpdater(claimed._id))
+      // A finished backup is kept for as long as its archive exists.
       await BackupJob.findByIdAndUpdate(claimed._id, {
-        status: 'done',
-        'progress.stage': 'Complete',
-        'progress.pct': 100,
-        archiveKey: result.archiveKey,
-        archiveName: result.archiveName,
-        expiresAt: new Date(Date.now() + JOB_TTL),
+        $set: {
+          status: 'done',
+          'progress.stage': 'Complete',
+          'progress.pct': 100,
+          archiveKey: result.archiveKey,
+          archiveName: result.archiveName,
+          sizeBytes: result.sizeBytes,
+        },
+        $unset: { expiresAt: 1 },
       })
+      // Only now that a new one exists, drop the oldest scheduled ones.
+      if (claimed.trigger === 'scheduled') {
+        const { keep } = await getSchedule()
+        await pruneScheduled(claimed.kind || 'full', keep)
+      }
     } else {
       result = await runRestore(claimed, makeUpdater(claimed._id))
       await BackupJob.findByIdAndUpdate(claimed._id, {
@@ -131,6 +144,10 @@ async function pollOnce() {
       'progress.stage': 'Failed',
       expiresAt: new Date(Date.now() + JOB_TTL),
     })
+    // Nobody is watching a scheduled backup -- tell the admins.
+    if (claimed.type === 'backup' && claimed.trigger === 'scheduled') {
+      await notifyBackupFailed(claimed, err.message).catch(() => {})
+    }
   } finally {
     clearInterval(heartbeat)
   }
@@ -161,10 +178,26 @@ async function main() {
   process.on('SIGINT',  () => shutdown('SIGINT'))
   process.on('SIGTERM', () => shutdown('SIGTERM'))
 
+  // Tidy the backup list: finished backups no longer expire, and archives
+  // left without a record by the old 48-hour expiry get one back.
+  try {
+    const kept = await keepFinishedBackups()
+    const adopted = await adoptOrphanArchives()
+    if (kept || adopted) logger.info('[backup-worker] Backup list tidied', { kept, adopted })
+  } catch (err) {
+    logger.warn('[backup-worker] Could not tidy the backup list', { error: err.message })
+  }
+
   logger.info('[backup-worker] Polling for jobs')
 
+  let lastScheduleCheck = 0
   while (running) {
     try {
+      // Automatic backups (Settings -> Maintenance): check once a minute.
+      if (Date.now() - lastScheduleCheck >= 60 * 1000) {
+        lastScheduleCheck = Date.now()
+        await queueDueBackups()
+      }
       await pollOnce()
     } catch (err) {
       logger.error('[backup-worker] Poll error', { error: err.message })

@@ -7,6 +7,7 @@ import multer from 'multer'
 import { BackupJob } from '#schema'
 import { getStorageAdapter } from '#methods/files/index.js'
 import logger from '#methods/utils/logger.js'
+import { backupSummary, saveSchedule, deleteBackup } from '#methods/backup/manage.js'
 
 const router = express.Router()
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 512 * 1024 * 1024 } })
@@ -22,6 +23,8 @@ router.post('/', async (req, res) => {
 
     const job = await BackupJob.create({
       type: 'backup',
+      kind: req.body?.kind === 'database' ? 'database' : 'full',
+      trigger: 'manual',
       requestedBy: req.user?.id || 'unknown',
       status: 'pending',
     })
@@ -34,15 +37,42 @@ router.post('/', async (req, res) => {
   }
 })
 
-// ── GET /admin/backup — list backup jobs ─────────────────────────────────────
+// ── GET /admin/backup — every backup on the server, plus recent jobs ────────
+// (in progress, failed, restores) that aren't finished backups.
 
 router.get('/', async (req, res) => {
   try {
-    const jobs = await BackupJob.find({})
-      .sort({ createdAt: -1 })
-      .limit(20)
-      .lean()
+    const [backups, others] = await Promise.all([
+      BackupJob.find({ type: 'backup', status: 'done' }).sort({ createdAt: -1 }).lean(),
+      BackupJob.find({ $or: [{ type: 'restore' }, { status: { $ne: 'done' } }] })
+        .sort({ createdAt: -1 }).limit(10).lean(),
+    ])
+    const jobs = [...others, ...backups].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
     return res.json({ jobs })
+  } catch (err) {
+    return res.status(500).json({ error: err.message })
+  }
+})
+
+// ── GET /admin/backup/summary — schedule, space used, estimates, free disk ──
+
+router.get('/summary', async (req, res) => {
+  try {
+    return res.json(await backupSummary())
+  } catch (err) {
+    logger.error('[admin/backup] Summary failed', { error: err.message })
+    return res.status(500).json({ error: err.message })
+  }
+})
+
+// ── PUT /admin/backup/schedule — automatic backups on/off ───────────────────
+// { database: off|daily|weekly, full: off|daily|weekly, keep, hour (UTC) }
+
+router.put('/schedule', async (req, res) => {
+  try {
+    const schedule = await saveSchedule(req.body || {})
+    logger.info('[admin/backup] Schedule saved', { by: req.user?.id, schedule })
+    return res.json({ schedule, ...(await backupSummary()) })
   } catch (err) {
     return res.status(500).json({ error: err.message })
   }
@@ -94,17 +124,10 @@ router.delete('/:id', async (req, res) => {
   try {
     const job = await BackupJob.findById(req.params.id).lean()
     if (!job) return res.status(404).json({ error: 'Job not found' })
-
-    if (job.archiveKey) {
-      try {
-        const storage = await getStorageAdapter()
-        await storage.delete(job.archiveKey)
-      } catch (err) {
-        logger.warn('[admin/backup] Failed to delete archive from S3', { error: err.message })
-      }
+    if (['pending', 'running'].includes(job.status)) {
+      return res.status(409).json({ error: 'That job is still running' })
     }
-
-    await BackupJob.findByIdAndDelete(job._id)
+    await deleteBackup(job)
     return res.json({ ok: true })
   } catch (err) {
     return res.status(500).json({ error: err.message })

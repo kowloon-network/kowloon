@@ -21,9 +21,11 @@ import { tmpdir } from 'os'
 import { pipeline as pipelineCallback } from 'stream'
 import { promisify } from 'util'
 import { PutObjectCommand } from '@aws-sdk/client-s3'
+import { Upload } from '@aws-sdk/lib-storage'
 import { getStorageAdapter } from '#methods/files/index.js'
 import { sendEmail } from '#methods/email/index.js'
 import { backupReadyEmail } from '#methods/email/templates.js'
+import { adminEmails, formatBytes } from './manage.js'
 import { getSetting } from '#methods/settings/cache.js'
 import logger from '#methods/utils/logger.js'
 
@@ -64,15 +66,17 @@ async function walkDir(dir) {
   return files
 }
 
-// Upload a local file to S3 at an exact key (bypass the random-key generator).
+// Upload a local file to S3 at an exact key (bypass the random-key
+// generator). Streamed, not read into memory: a full backup can be larger
+// than the container's RAM.
 async function putFileAtKey(storage, key, filePath, contentType = 'application/octet-stream') {
-  const buf = await readFile(filePath)
-  await storage.client.send(new PutObjectCommand({
-    Bucket: storage.bucket,
-    Key: key,
-    Body: buf,
-    ContentType: contentType,
-  }))
+  const { size } = await stat(filePath)
+  // Multipart upload: a single PutObject is capped at 5 GB.
+  await new Upload({
+    client: storage.client,
+    params: { Bucket: storage.bucket, Key: key, Body: createReadStream(filePath), ContentType: contentType },
+  }).done()
+  return size
 }
 
 async function putBufAtKey(storage, key, buf, contentType = 'application/octet-stream') {
@@ -90,6 +94,10 @@ export async function runBackup(job, updateProgress) {
   const mongoUri = process.env.MONGO_URI || 'mongodb://localhost:27017/kowloon'
   const domain = getSetting('domain') || 'localhost'
   const adminEmail = getSetting('adminEmail')
+
+  // "database": just the database (small). "full": the database and every
+  // uploaded file.
+  const databaseOnly = job.kind === 'database'
 
   const workDir = join(tmpdir(), `kowloon-backup-${job._id}`)
   await mkdir(workDir, { recursive: true })
@@ -132,15 +140,16 @@ export async function runBackup(job, updateProgress) {
 
     logger.info('[backup] Database dump complete')
 
-    // 2. Download files from S3 ────────────────────────────────────────────────
-    await updateProgress('Downloading files', 30)
-
+    // 2. Download files from S3 (full backups only) ──────────────────────────
     const storage = await getStorageAdapter()
     const filesDir = join(workDir, 'files')
     await mkdir(filesDir, { recursive: true })
 
+    let fileKeys = []
+    if (!databaseOnly) {
+    await updateProgress('Downloading files', 30)
     const allKeys = await storage.listAllObjects()
-    const fileKeys = allKeys.filter((k) => !k.startsWith('_backups/') && !k.startsWith('_restore-tmp/'))
+    fileKeys = allKeys.filter((k) => !k.startsWith('_backups/') && !k.startsWith('_restore-tmp/'))
 
     logger.info(`[backup] Downloading ${fileKeys.length} files`)
 
@@ -155,6 +164,7 @@ export async function runBackup(job, updateProgress) {
         await updateProgress('Downloading files', pct)
       }
     }
+    }
 
     // 3. Write manifest ────────────────────────────────────────────────────────
     await updateProgress('Packaging archive', 72)
@@ -164,13 +174,14 @@ export async function runBackup(job, updateProgress) {
       createdAt: new Date().toISOString(),
       domain,
       database: mongoUri.split('/').pop()?.split('?')[0] || 'kowloon',
+      contents: databaseOnly ? 'database' : 'full',
       fileCount: fileKeys.length,
     }
     await writeFile(join(workDir, 'manifest.json'), JSON.stringify(manifest, null, 2))
 
     // 4. Package as tar.gz via system tar ─────────────────────────────────────
     const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)
-    const archiveName = `kowloon-backup-${ts}.tar.gz`
+    const archiveName = `kowloon-${databaseOnly ? 'database' : 'full'}-backup-${ts}.tar.gz`
     const archivePath = join(tmpdir(), archiveName)
 
     await new Promise((resolve, reject) => {
@@ -192,28 +203,33 @@ export async function runBackup(job, updateProgress) {
     await updateProgress('Uploading archive', 82)
 
     const archiveKey = `_backups/${archiveName}`
-    await putFileAtKey(storage, archiveKey, archivePath, 'application/gzip')
+    const sizeBytes = await putFileAtKey(storage, archiveKey, archivePath, 'application/gzip')
     await rm(archivePath, { force: true })
 
     logger.info(`[backup] Archive uploaded to S3: ${archiveKey}`)
 
-    // 6. Send email notification ───────────────────────────────────────────────
-    await updateProgress('Sending notification', 95)
-
-    const downloadUrl = `https://${domain}/api/admin/backup/${job._id}/download`
-
-    if (adminEmail) {
-      try {
-        const { subject, html } = backupReadyEmail({ downloadUrl, expiresIn: '48 hours' })
-        await sendEmail({ to: adminEmail, subject, html })
-        logger.info(`[backup] Notification email sent to ${adminEmail}`)
-      } catch (err) {
-        logger.warn('[backup] Failed to send notification email', { error: err.message })
+    // 6. Email the admin who asked for it (manual backups only -- a nightly
+    // email would just be noise; scheduled ones email only on failure).
+    if (job.trigger !== 'scheduled') {
+      await updateProgress('Sending notification', 95)
+      const to = (await adminEmails({ only: job.requestedBy }))[0] || adminEmail
+      if (to) {
+        try {
+          const { subject, html } = backupReadyEmail({
+            pageUrl: `https://${domain}/admin/settings#maintenance`,
+            kind: databaseOnly ? 'database' : 'full',
+            size: formatBytes(sizeBytes),
+          })
+          await sendEmail({ to, subject, html })
+          logger.info(`[backup] Notification email sent to ${to}`)
+        } catch (err) {
+          logger.warn('[backup] Failed to send notification email', { error: err.message })
+        }
       }
     }
 
     await updateProgress('Complete', 100)
-    return { archiveKey, archiveName }
+    return { archiveKey, archiveName, sizeBytes }
   } finally {
     await rm(workDir, { recursive: true, force: true })
   }
