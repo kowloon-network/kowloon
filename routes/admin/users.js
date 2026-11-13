@@ -6,6 +6,8 @@ import route from "../utils/route.js";
 import makeCollection from "../utils/makeCollection.js";
 import { User } from "#schema";
 import { isStaff } from "#methods/auth/staffPolicy.js";
+import isServerAdmin from "#methods/auth/isServerAdmin.js";
+import deleteAccountCascade from "#methods/users/deleteAccountCascade.js";
 import { getSetting } from "#methods/settings/cache.js";
 import getSettings from "#methods/settings/get.js";
 
@@ -224,8 +226,27 @@ router.delete(
         }
       }
 
+      // Permanent delete removes the account AND everything they posted --
+      // the same full deletion as a ban, minus the reserved username and
+      // banned email. (It used to delete only the User row, leaving their
+      // posts, replies, files and circles behind with no owner.)
       if (query.fullDelete === "true") {
-        await User.deleteOne({ id: target.id });
+        if (target.id === adminUser.id) {
+          setStatus(400);
+          set("error", "You can't permanently delete your own account from here");
+          return;
+        }
+        if (await isServerAdmin(target.id)) {
+          setStatus(403);
+          set("error", "Remove their admin rights before deleting their account");
+          return;
+        }
+        const result = await deleteAccountCascade(target.id, { purgeContent: true });
+        if (!result?.ok) {
+          setStatus(409);
+          set("error", result?.error || "Couldn't delete the account");
+          return;
+        }
         set("ok", true);
         set("hardDeleted", true);
         return;
