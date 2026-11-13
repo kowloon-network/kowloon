@@ -114,7 +114,10 @@ export default async function pullFromRemote({
 
     // Short page -> done. No cursor, cursor didn't move, or no new ids
     // (an older peer that ignores `before` keeps returning page one) -> stop.
-    if (res.rawCount < limit || !res.nextCursor || res.nextCursor === before || fresh === 0) break;
+    // A full page whose items were all filtered out by the remote (fresh 0
+    // but nothing arrived) is NOT the end -- keep paging by the cursor.
+    const stalled = fresh === 0 && res.items.length > 0;
+    if (res.rawCount < limit || !res.nextCursor || res.nextCursor === before || stalled) break;
     before = res.nextCursor;
     if (page === maxPages - 1) truncated = true;
   }
@@ -238,6 +241,10 @@ async function pullPage({ remoteDomain, from = [], to = [], since = null, limit 
     ); // only used for user follows
     const tombstones = (Array.isArray(data.tombstones) ? data.tombstones : []).filter(onRemote);
     const nextCursor = data.next || null;
+    // How many items the remote's page held BEFORE it dropped ones meant
+    // only for people the author blocked. Newer servers send pageSize; an
+    // older one doesn't, so fall back to what arrived.
+    const pageSize = Number.isInteger(data.pageSize) ? data.pageSize : rawItems.length;
 
     logger.info("pullFromRemote: Retrieved", {
       remoteDomain,
@@ -342,7 +349,7 @@ async function pullPage({ remoteDomain, from = [], to = [], since = null, limit 
     }
 
     if (upsertedIds.size === 0) {
-      return { items, rawCount: rawItems.length, nextCursor, error: null };
+      return { items, rawCount: pageSize, nextCursor, error: null };
     }
 
     // Load FeedItem metadata needed for FanOut rows
@@ -496,7 +503,7 @@ async function pullPage({ remoteDomain, from = [], to = [], since = null, limit 
       serverOnlyPull,
     });
 
-    return { items, rawCount: rawItems.length, nextCursor, error: null };
+    return { items, rawCount: pageSize, nextCursor, error: null };
   } catch (error) {
     logger.error("pullFromRemote: Error", {
       remoteDomain,

@@ -254,11 +254,20 @@ export default route(
         if (members?.size > 0) addToMap(item, members);
       }
 
+      // Sort newest first and cut to `limit`. Each sub-query above is
+      // limited separately, so the merged list can exceed `limit`; returning
+      // all of it would make `next` (oldest returned) jump past items a
+      // sub-query cut off. The true newest-`limit` of the union is always
+      // within the union of each sub-query's newest-`limit`.
+      const page = [...itemMap.values()]
+        .sort((a, b) => new Date(b.item.publishedAt) - new Date(a.item.publishedAt))
+        .slice(0, limit);
+
       // An author who has blocked one of our members gets no copy to them:
-      // drop that member from the item's recipients, and the item if nobody
-      // is left. Applies to every kind of item (public, circle, server, group).
-      if (itemMap.size) {
-        const authors = [...new Set([...itemMap.values()].map(({ item }) => item.actorId).filter(Boolean))];
+      // drop that member from the item's recipients; items left with nobody
+      // are dropped below. Applies to every kind of item (public, circle, server, group).
+      if (page.length) {
+        const authors = [...new Set(page.map(({ item }) => item.actorId).filter(Boolean))];
         const authorDocs = authors.length
           ? await User.find({ id: { $in: authors } }).select("id circles.blocked").lean()
           : [];
@@ -275,23 +284,18 @@ export default route(
             const c = byCircle.get(u.circles?.blocked);
             if (c) blockedBy.set(u.id, new Set(c.members.map((m) => m.id)));
           }
-          for (const [id, entry] of itemMap) {
+          for (const entry of page) {
             const blocked = blockedBy.get(entry.item.actorId);
             if (!blocked) continue;
             for (const r of blocked) entry.recipients.delete(r);
-            if (entry.recipients.size === 0) itemMap.delete(id);
           }
         }
       }
 
-      // Sort newest first and cut to `limit`. Each sub-query above is
-      // limited separately, so the merged list can exceed `limit`; returning
-      // all of it would make `next` (oldest returned) jump past items a
-      // sub-query cut off. The true newest-`limit` of the union is always
-      // within the union of each sub-query's newest-`limit`.
-      const sorted = [...itemMap.values()]
-        .sort((a, b) => new Date(b.item.publishedAt) - new Date(a.item.publishedAt))
-        .slice(0, limit);
+      // `next` and `pageSize` describe the page BEFORE that filter, so the
+      // puller keeps paging when items were dropped (a short page would read
+      // as "the end" and older items would be skipped for good).
+      const sorted = page.filter((e) => e.recipients.size > 0);
 
       const items = sorted.map(({ item }) => item);
       const recipients = sorted.map(({ item, recipients }) => ({
@@ -341,8 +345,9 @@ export default route(
       set("items", items);
       set("recipients", recipients);
       set("tombstones", tombstones);
-      if (items.length > 0) {
-        set("next", new Date(items[items.length - 1].publishedAt).toISOString());
+      set("pageSize", page.length);
+      if (page.length > 0) {
+        set("next", new Date(page[page.length - 1].item.publishedAt).toISOString());
       }
       return;
     }
