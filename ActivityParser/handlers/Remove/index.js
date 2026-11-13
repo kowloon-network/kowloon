@@ -2,7 +2,6 @@
 import { Group, Circle } from "#schema";
 import getSettings from "#methods/settings/get.js";
 import isServerAdmin from "#methods/auth/isServerAdmin.js";
-import isServerMod from "#methods/auth/isServerMod.js";
 import isGroupAdmin from "#methods/groups/isAdmin.js";
 import regenerateCircleIcon from "#methods/circles/regenerateCircleIcon.js";
 
@@ -84,17 +83,13 @@ export default async function Remove(activity) {
         if (targetCircle.actorId !== settings.actorId) {
           return { activity, error: "Cannot update remote server Circles" };
         }
-        if (
-          activity.target === settings.adminCircle &&
-          !(await isServerAdmin(activity.actorId))
-        ) {
+        // Server-owned circles are admin-only; the block lists go through
+        // Moderation (see the Add handler).
+        if (!(await isServerAdmin(activity.actorId))) {
           return { activity, error: "You are not a server admin" };
         }
-        if (
-          activity.target === settings.modCircle &&
-          !(await isServerMod(activity.actorId))
-        ) {
-          return { activity, error: "You are not a server moderator" };
+        if ([settings.blockedCircle, settings.defederatedCircle].includes(activity.target)) {
+          return { activity, error: "Use Moderation to change the server's block lists" };
         }
         break;
       }

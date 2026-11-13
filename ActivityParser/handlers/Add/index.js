@@ -2,7 +2,6 @@ import { Group, Circle, User } from "#schema";
 import getObjectById from "#methods/core/getObjectById.js";
 import getSettings from "#methods/settings/get.js";
 import isServerAdmin from "#methods/auth/isServerAdmin.js";
-import isServerMod from "#methods/auth/isServerMod.js";
 import isGroupAdmin from "#methods/groups/isAdmin.js";
 import toMember from "#methods/parse/toMember.js";
 import createNotification from "#methods/notifications/create.js";
@@ -83,16 +82,14 @@ export default async function Add(activity) {
       case "Server":
         if (targetCircle.actorId != settings.actorId)
           return { activity, error: "Cannot update remote server Circles" };
-        if (
-          activity.target === settings.adminCircle &&
-          !(await isServerAdmin(activity.actorId))
-        )
+        // Server-owned circles are admin-only. The server's Blocked and
+        // Defederated lists are refused here even for admins: they go
+        // through Moderation (routes/admin/blocklist.js), which handles
+        // bans, visitor sign-outs and server status.
+        if (!(await isServerAdmin(activity.actorId)))
           return { activity, error: "You are not a server admin" };
-        if (
-          activity.target === settings.modCircle &&
-          !(await isServerMod(activity.actorId))
-        )
-          return { activity, error: "You are not a server moderator" };
+        if ([settings.blockedCircle, settings.defederatedCircle].includes(activity.target))
+          return { activity, error: "Use Moderation to change the server's block lists" };
         break;
       case "Group":
         if (!(await isGroupAdmin(activity.actorId, targetCircle.actorId)))
