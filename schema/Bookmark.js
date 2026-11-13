@@ -80,6 +80,7 @@ const BookmarkSchema = new Schema(
     body: { type: String, default: "" },
 
     // Lifecycle
+    lastEditedBy: { type: String, default: null }, // admin or moderator who last created/edited it in the admin panel
     deletedAt: { type: Date, default: null, index: true },
     deletedBy: { type: String, default: null },
 

@@ -5,6 +5,7 @@ import express from "express";
 import route from "../utils/route.js";
 import makeCollection from "../utils/makeCollection.js";
 import { User } from "#schema";
+import { isStaff } from "#methods/auth/staffPolicy.js";
 import { getSetting } from "#methods/settings/cache.js";
 import getSettings from "#methods/settings/get.js";
 
@@ -199,13 +200,28 @@ router.post(
 router.delete(
   "/:id",
   route(
-    async ({ params, query, user: adminUser, set, setStatus }) => {
+    async ({ req, params, query, user: adminUser, set, setStatus }) => {
       const target = await User.findOne({ id: decodeURIComponent(params.id) });
 
       if (!target) {
         setStatus(404);
         set("error", "User not found");
         return;
+      }
+
+      // Moderators may close (soft-delete) accounts, not erase them, and
+      // not an admin's or another moderator's (methods/auth/staffPolicy.js).
+      if (req.staffRole === "mod") {
+        if (query.fullDelete === "true") {
+          setStatus(403);
+          set("error", "Only an admin can permanently delete an account");
+          return;
+        }
+        if (await isStaff(target.id)) {
+          setStatus(403);
+          set("error", "Only an admin can close an admin's or moderator's account");
+          return;
+        }
       }
 
       if (query.fullDelete === "true") {
@@ -222,6 +238,7 @@ router.delete(
       }
 
       target.deletedAt = new Date();
+      target.deletedBy = adminUser.id;
       target.active = false;
       await target.save();
 

@@ -39,7 +39,7 @@ router.get(
 router.post(
   "/",
   route(
-    async ({ body, set, setStatus }) => {
+    async ({ user, body, set, setStatus }) => {
       if (!body.name) {
         setStatus(400);
         set("error", "name is required");
@@ -47,7 +47,7 @@ router.post(
       }
       const fields = pick(body, ALLOWED_FIELDS);
       if (!fields.to) fields.to = "@public";
-      const section = await DiscoverySection.create(fields);
+      const section = await DiscoverySection.create({ ...fields, lastEditedBy: user.id });
       setStatus(201);
       set("section", sanitize(section.toObject()));
     },
@@ -59,7 +59,7 @@ router.post(
 router.patch(
   "/:id",
   route(
-    async ({ params, body, set, setStatus }) => {
+    async ({ user, params, body, set, setStatus }) => {
       const id = decodeURIComponent(params.id);
       const section = await DiscoverySection.findOne({ id, deletedAt: null });
       if (!section) {
@@ -68,6 +68,7 @@ router.patch(
         return;
       }
       Object.assign(section, pick(body, ALLOWED_FIELDS));
+      section.lastEditedBy = user.id;
       await section.save();
       set("ok", true);
       set("section", sanitize(section.toObject()));

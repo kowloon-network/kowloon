@@ -67,6 +67,7 @@ const DiscoverySectionSchema = new Schema(
 
     deletedAt: { type: Date, default: null },
     deletedBy: { type: String, default: null },
+    lastEditedBy: { type: String, default: null },
 
     url: { type: String, default: undefined },
     signature: { type: Buffer, default: undefined },

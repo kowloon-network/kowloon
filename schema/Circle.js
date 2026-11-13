@@ -31,6 +31,7 @@ const CircleSchema = new Schema(
     reactCount: { type: Number, default: 0 }, // The number of likes to this post
   reactPreview: { type: String, default: null }, // Most-used emoji react
     shareCount: { type: Number, default: 0 }, // The number of shares of this post
+    lastEditedBy: { type: String, default: null }, // admin or moderator who last created/edited it in the admin panel
     deletedAt: { type: Date, default: null },
     deletedBy: { type: String, default: null },
     url: { type: String, default: undefined },

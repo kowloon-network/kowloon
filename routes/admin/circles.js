@@ -103,7 +103,7 @@ router.get(
 router.post(
   "/",
   route(
-    async ({ body, set, setStatus }) => {
+    async ({ user, body, set, setStatus }) => {
       if (!body.name?.trim()) {
         setStatus(400);
         set("error", "name is required");
@@ -115,6 +115,7 @@ router.post(
 
       const circle = await Circle.create({
         ...fields,
+        lastEditedBy: user.id,
         type: "Circle",
         actorId: getServerActorId(),
         actor: getServerActor(),
@@ -131,7 +132,7 @@ router.post(
 router.patch(
   "/:id",
   route(
-    async ({ params, body, set, setStatus }) => {
+    async ({ user, params, body, set, setStatus }) => {
       const circle = await Circle.findOne({
         id: decodeURIComponent(params.id),
         deletedAt: null,
@@ -151,6 +152,7 @@ router.patch(
 
       const fields = pick(body, ALLOWED_FIELDS);
       Object.assign(circle, fields);
+      circle.lastEditedBy = user.id;
       await circle.save();
 
       set("ok", true);

@@ -133,6 +133,7 @@ router.post(
 
       const page = await Page.create({
         ...fields,
+        lastEditedBy: adminUser.id,
         actorId: serverActorId,
         actor: getServerActor(),
       });
@@ -169,6 +170,7 @@ router.patch(
       // Clear wordCount/charCount so pre-save hook recalculates them
       page.wordCount = 0;
       page.charCount = 0;
+      page.lastEditedBy = adminUser.id;
       await page.save();
 
       set("ok", true);

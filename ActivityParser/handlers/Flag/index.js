@@ -4,6 +4,7 @@ import { Flag } from "#schema";
 import getObjectById from "#methods/core/getObjectById.js";
 import kowloonId from "#methods/parse/kowloonId.js";
 import Settings from "#schema/Settings.js";
+import { notifyStaff } from "#methods/auth/staffPolicy.js";
 
 export default async function FlagHandler(activity) {
   try {
@@ -92,6 +93,14 @@ export default async function FlagHandler(activity) {
 
     // annotate for downstreams + Undo
     activity.objectId = flag.id;
+
+    // Tell every admin and moderator there's something to look at. Not
+    // awaited: a slow notification must not hold up the reporter.
+    notifyStaff({
+      actorId: activity.actorId,
+      summary: `New report: ${reason.label || reason.code} -- ${(targetType || "item").toLowerCase()}`,
+      href: `https://${ourDomain}/admin/moderation/${encodeURIComponent(flag.id)}`,
+    }).catch(() => {});
 
     return { activity, flag, federate: isTargetRemote };
   } catch (err) {

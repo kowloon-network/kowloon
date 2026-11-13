@@ -168,6 +168,7 @@ router.post(
       }
 
       const item = await Discovery.create({
+        lastEditedBy: admin.id,
         ref,
         section,
         note: body.note,
@@ -187,7 +188,7 @@ router.post(
 router.patch(
   "/:id",
   route(
-    async ({ params, body, set, setStatus }) => {
+    async ({ user, params, body, set, setStatus }) => {
       const id = decodeURIComponent(params.id);
       const item = await Discovery.findOne({ id, deletedAt: null });
       if (!item) {
@@ -198,6 +199,7 @@ router.patch(
       for (const f of ["note", "order", "active", "section"]) {
         if (f in body) item[f] = body[f];
       }
+      item.lastEditedBy = user.id;
       await item.save();
       set("ok", true);
       set("discovery", sanitize(item.toObject()));

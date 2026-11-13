@@ -2,6 +2,7 @@
 import route from '../utils/route.js';
 import { User } from '#schema';
 import isServerAdmin from '#methods/auth/isServerAdmin.js';
+import { isServerModerator } from '#methods/auth/staffPolicy.js';
 
 export default route(async ({ user, set, setStatus }) => {
   const userDoc = await User.findOne({ id: user.id })
@@ -27,5 +28,6 @@ export default route(async ({ user, set, setStatus }) => {
     muted: userDoc.circles?.muted,
     groups: userDoc.circles?.groups,
     isServerAdmin: !!(await isServerAdmin(userDoc.id)),
+    isServerMod: !!(await isServerModerator(userDoc.id)),
   });
 }, { allowUnauth: false });

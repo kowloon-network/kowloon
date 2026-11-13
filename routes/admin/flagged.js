@@ -6,6 +6,7 @@ import { Flag, Post, Reply, Page, Bookmark, Group, Circle, User, FeedItems } fro
 import createNotification from "#methods/notifications/create.js";
 import { getSetting } from "#methods/settings/cache.js";
 import { addToList, BlocklistError } from "#methods/moderation/blocklist.js";
+import { isStaff } from "#methods/auth/staffPolicy.js";
 
 const router = express.Router({ mergeParams: true });
 
@@ -202,6 +203,27 @@ router.patch(
   )
 );
 
+// Moderator limits (methods/auth/staffPolicy.js): no acting on an admin's
+// or moderator's content or account, and no bans. Returns a refusal
+// message, or null when the action may go ahead.
+async function modRefusal(req, flag, { ban = false } = {}) {
+  if (req.staffRole !== "mod") return null;
+  let author = flag.targetActorId;
+  if (!author) {
+    const Model = MODELS[flag.targetType];
+    const doc = Model ? await Model.findOne({ id: flag.target }).select("actorId").lean() : null;
+    author = doc?.actorId;
+  }
+  if (author && (await isStaff(author))) {
+    return "Only an admin can act on an admin's or moderator's content";
+  }
+  const domain = String(getSetting("domain") || "").toLowerCase();
+  if (ban && author && author.toLowerCase().endsWith(`@${domain}`) && author.split("@").length === 3) {
+    return "Only an admin can ban a member of this server";
+  }
+  return null;
+}
+
 // Shared prelude: load the flag, 404 if missing, 409 if already handled --
 // these action endpoints are one-shot, not idempotent re-triggers.
 async function loadOpenFlag(id, setStatus, set) {
@@ -254,9 +276,15 @@ router.post(
 router.post(
   "/:id/remove",
   route(
-    async ({ params, user: adminUser, set, setStatus }) => {
+    async ({ req, params, user: adminUser, set, setStatus }) => {
       const flag = await loadOpenFlag(params.id, setStatus, set);
       if (!flag) return;
+      const refusal = await modRefusal(req, flag);
+      if (refusal) {
+        setStatus(403);
+        set("error", refusal);
+        return;
+      }
 
       if (flag.targetType === "User") {
         setStatus(400);
@@ -316,9 +344,15 @@ router.post(
 router.post(
   "/:id/hard-delete",
   route(
-    async ({ params, user: adminUser, set, setStatus }) => {
+    async ({ req, params, user: adminUser, set, setStatus }) => {
       const flag = await loadOpenFlag(params.id, setStatus, set);
       if (!flag) return;
+      const refusal = await modRefusal(req, flag);
+      if (refusal) {
+        setStatus(403);
+        set("error", refusal);
+        return;
+      }
 
       if (flag.targetType === "User") {
         setStatus(400);
@@ -384,9 +418,15 @@ router.post(
 router.post(
   "/:id/block",
   route(
-    async ({ params, body, user: adminUser, set, setStatus }) => {
+    async ({ req, params, body, user: adminUser, set, setStatus }) => {
       const flag = await loadOpenFlag(params.id, setStatus, set);
       if (!flag) return;
+      const refusal = await modRefusal(req, flag, { ban: true });
+      if (refusal) {
+        setStatus(403);
+        set("error", refusal);
+        return;
+      }
 
       if (!flag.targetActorId) {
         // Older flags didn't record the author; ask the reported object.

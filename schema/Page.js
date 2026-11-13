@@ -86,6 +86,7 @@ const PageSchema = new Schema(
     to: { type: String, default: "" },
     canReply: { type: String, default: "" },
     canReact: { type: String, default: "" },
+    lastEditedBy: { type: String, default: null }, // admin or moderator who last created/edited it in the admin panel
     deletedAt: { type: Date, default: null }, // If this page was deleted, this is when it was deleted. If it's not set the page is not deleted
     deletedBy: { type: String, default: null }, // I`f the activity is deleted, who deleted it (usually the user unless an admin does it)
     signature: Buffer, // The creator's public signature for verification

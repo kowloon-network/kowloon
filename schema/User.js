@@ -133,6 +133,7 @@ const UserSchemaDef = {
   url: { type: String }, // your existing profile URL
   active: { type: Boolean, default: true },
   deletedAt: { type: Date },
+  deletedBy: { type: String }, // who closed the account (an admin or moderator)
   feedRefreshedAt: { type: Date },
 
   // NEW: federation helpers

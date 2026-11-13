@@ -3,6 +3,7 @@ import { User } from "#schema";
 import generateToken from "#methods/generate/token.js";
 import { getSetting } from "#methods/settings/cache.js";
 import isServerAdmin from "#methods/auth/isServerAdmin.js";
+import { isServerModerator } from "#methods/auth/staffPolicy.js";
 
 const S = (v) => (typeof v === "string" ? v : v == null ? "" : String(v));
 
@@ -73,6 +74,7 @@ export default async function login(input, maybePassword = "") {
     muted: uo.circles?.muted,
     groups: uo.circles?.groups,
     isServerAdmin: !!(await isServerAdmin(uo.id)),
+    isServerMod: !!(await isServerModerator(uo.id)),
   };
 
   return { user, token };

@@ -1,8 +1,9 @@
 // routes/admin/index.js
-// Admin API — all routes require server admin membership
+// Admin API -- server admins, and moderators for the routes listed in
+// methods/auth/staffPolicy.js
 
 import express from "express";
-import isServerAdmin from "#methods/auth/isServerAdmin.js";
+import { staffRole, modMayUse } from "#methods/auth/staffPolicy.js";
 import { authenticateRequest, AuthUnavailable } from "#routes/utils/route.js";
 import { create, list, getOne, deactivate } from "./invites.js";
 import activitiesRouter from "./activities.js";
@@ -62,10 +63,16 @@ router.use(async (req, res, next) => {
       .json({ error: "A visiting session cannot use admin routes" });
   }
 
-  const admin = await isServerAdmin(user.id);
-  if (!admin) {
+  const role = await staffRole(user.id);
+  if (!role) {
     return res.status(403).json({ error: "Server admin access required" });
   }
+  if (role === "mod" && !modMayUse(req.method, req.path)) {
+    return res.status(403).json({ error: "Only an admin can do that" });
+  }
+  // Handlers read this for the moderator-only rules (no bans, no acting
+  // on other staff, admins told about defederation).
+  req.staffRole = role;
   next();
 });
 

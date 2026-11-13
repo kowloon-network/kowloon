@@ -69,6 +69,7 @@ const DiscoverySchema = new Schema(
 
     addedBy: { type: String, default: undefined }, // admin user id (audit)
 
+    lastEditedBy: { type: String, default: null }, // admin or moderator who last created/edited it in the admin panel
     deletedAt: { type: Date, default: null },
     deletedBy: { type: String, default: null },
 

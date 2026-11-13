@@ -127,7 +127,7 @@ router.get(
 router.post(
   "/",
   route(
-    async ({ body, set, setStatus }) => {
+    async ({ user, body, set, setStatus }) => {
       if (!body.title?.trim()) {
         setStatus(400);
         set("error", "title is required");
@@ -168,6 +168,7 @@ router.post(
 
       const bookmark = await Bookmark.create({
         ...fields,
+        lastEditedBy: user.id,
         actorId: getServerActorId(),
         actor: getServerActor(),
       });
@@ -183,7 +184,7 @@ router.post(
 router.patch(
   "/:id",
   route(
-    async ({ params, body, set, setStatus }) => {
+    async ({ user, params, body, set, setStatus }) => {
       const bookmark = await Bookmark.findOne({
         id: decodeURIComponent(params.id),
         deletedAt: null,
@@ -227,6 +228,7 @@ router.patch(
       }
 
       Object.assign(bookmark, fields);
+      bookmark.lastEditedBy = user.id;
       await bookmark.save();
 
       set("ok", true);

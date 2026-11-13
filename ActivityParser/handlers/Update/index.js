@@ -17,6 +17,7 @@ import {
 import kowloonId from "#methods/parse/kowloonId.js";
 import { canonicalTo } from "#methods/parse/canonicalTo.js";
 import isServerAdmin from "#methods/auth/isServerAdmin.js";
+import { isServerModerator } from "#methods/auth/staffPolicy.js";
 import getFederationTargetsHelper from "../utils/getFederationTargets.js";
 import refreshActorCache from "#methods/users/refreshActorCache.js";
 import sanitizeHtml from "#methods/utils/sanitize.js";
@@ -231,8 +232,16 @@ export default async function Update(activity) {
 
     const isOwner = activity.actorId === ownerActorId;
     const isAdmin = await isServerAdmin(activity.actorId);
+    // Moderators may edit the server's own (non-System) circles too
+    // (methods/auth/staffPolicy.js).
+    const serverDomain = String(getServerSettings().domain || "").toLowerCase();
+    const isModOnServerCircle =
+      parsed.type === "Circle" &&
+      current.type !== "System" &&
+      String(current.actorId || "").toLowerCase() === `@${serverDomain}` &&
+      (await isServerModerator(activity.actorId));
 
-    if (!isOwner && !isAdmin) {
+    if (!isOwner && !isAdmin && !isModOnServerCircle) {
       return { activity, error: "Update: not authorized to modify this object" };
     }
 
