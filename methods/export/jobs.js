@@ -86,7 +86,7 @@ export async function requestExport(actorId) {
 async function deleteArchive(job) {
   if (!job?.archiveKey) return
   try {
-    await getStorageAdapter().delete(job.archiveKey)
+    await (await getStorageAdapter()).delete(job.archiveKey)
   } catch (err) {
     logger.warn('[export] Could not delete archive', { key: job.archiveKey, error: err.message })
   }

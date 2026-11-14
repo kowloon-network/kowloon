@@ -65,7 +65,7 @@ async function download(req, res) {
     if (!job || job.status !== "done" || !job.archiveKey) {
       return res.status(404).type("text/plain").send("This download is no longer available.");
     }
-    const stream = await getStorageAdapter().getStream(job.archiveKey);
+    const stream = await (await getStorageAdapter()).getStream(job.archiveKey);
     res.setHeader("Content-Type", "application/zip");
     res.setHeader("Content-Disposition", `attachment; filename="${String(job.archiveName || "kowloon-data.zip").replace(/["\\\r\n]/g, "")}"`);
     if (job.sizeBytes) res.setHeader("Content-Length", String(job.sizeBytes));

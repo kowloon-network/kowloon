@@ -133,7 +133,7 @@ export async function buildExport(job, updateProgress = async () => {}) {
   const user = await User.findOne({ id: actorId }).lean()
   if (!user) throw new Error('Account not found')
 
-  const storage = getStorageAdapter()
+  const storage = await getStorageAdapter()
   if (!storage?.client || !storage?.bucket) throw new Error('Storage is not configured')
 
   const domain = getSetting('domain') || actorId.split('@').pop()
