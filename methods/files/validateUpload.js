@@ -200,6 +200,19 @@ export async function reencodeImage(buffer, mimeType) {
   }
 }
 
+// libheif applies the file's rotation, so the decoded pixels are upright.
+export async function heicToJpeg(buffer) {
+  try {
+    const { default: decode } = await import('heic-decode');
+    const { width, height, data } = await decode({ buffer });
+    return await sharp(Buffer.from(data.buffer, data.byteOffset, data.byteLength), {
+      raw: { width, height, channels: 4 },
+    }).jpeg({ quality: 92 }).toBuffer();
+  } catch (err) {
+    throw new Error(`Couldn't read this HEIC image (${err.message})`);
+  }
+}
+
 // ── Main validation entry point ───────────────────────────────────────────────
 
 /**
@@ -217,6 +230,12 @@ export async function validateUpload(buffer, claimedMimeType) {
 
   if (mimeType === 'image/svg+xml') {
     safeBuffer = sanitizeSvg(buffer);
+  } else if (mimeType === 'image/heic' || mimeType === 'image/heif') {
+    // iPhone photos. sharp's prebuilt binaries can't decode HEVC, so they
+    // used to be stored as uploaded -- with their EXIF, GPS location
+    // included -- and most browsers can't show HEIC anyway. Convert to JPEG,
+    // which keeps the pixels and drops everything else.
+    return { buffer: await heicToJpeg(buffer), mimeType: 'image/jpeg' };
   } else if (mimeType.startsWith('image/')) {
     safeBuffer = await reencodeImage(buffer, mimeType);
   }

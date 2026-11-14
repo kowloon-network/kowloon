@@ -6,7 +6,7 @@ import { isServerModerator } from '#methods/auth/staffPolicy.js';
 
 export default route(async ({ user, set, setStatus }) => {
   const userDoc = await User.findOne({ id: user.id })
-    .select('id username type profile prefs publicKey circles')
+    .select('id username type profile prefs publicKey circles email emailVerified')
     .lean();
 
   if (!userDoc) {
@@ -29,5 +29,8 @@ export default route(async ({ user, set, setStatus }) => {
     groups: userDoc.circles?.groups,
     isServerAdmin: !!(await isServerAdmin(userDoc.id)),
     isServerMod: !!(await isServerModerator(userDoc.id)),
+    // Your own email, for Settings. Never to a visiting (cross-server
+    // OAuth) session: that's another server asking, not you.
+    ...(user.scope === 'visiting' ? {} : { email: userDoc.email || null, emailVerified: !!userDoc.emailVerified }),
   });
 }, { allowUnauth: false });

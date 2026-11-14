@@ -5,7 +5,8 @@ import route from '../utils/route.js';
 import { getStorageAdapter } from '#methods/files/index.js';
 import { validateUploadFile } from '#methods/files/validateUpload.js';
 import { createReadStream } from 'fs';
-import { unlink } from 'fs/promises';
+import { unlink, stat } from 'fs/promises';
+import { stripMediaMetadata } from '#methods/files/stripMediaMetadata.js';
 import File from '#schema/File.js';
 import MediaJob from '#schema/MediaJob.js';
 import { canonicalTo } from '#methods/parse/canonicalTo.js';
@@ -24,6 +25,7 @@ export default route(
       return await handleUpload(ctx);
     } finally {
       if (ctx.req.file?.path) await unlink(ctx.req.file.path).catch(() => {});
+      if (ctx.req.strippedPath) await unlink(ctx.req.strippedPath).catch(() => {});
     }
   },
   { allowUnauth: false }
@@ -42,7 +44,9 @@ async function handleUpload({ req, body, user, setStatus, set }) {
       return;
     }
 
-    const { originalname: originalFileName, mimetype, path: tempPath, size: tempSize } = req.file;
+    const { mimetype, path: rawPath } = req.file;
+    let { originalname: originalFileName, size: tempSize } = req.file;
+    let tempPath = rawPath;
     // null for audio/video: those are streamed from the temp file to storage
     // without being loaded into memory.
     let buffer = null;
@@ -62,6 +66,28 @@ async function handleUpload({ req, body, user, setStatus, set }) {
       setStatus(415);
       set('error', err.message);
       return;
+    }
+
+    // HEIC/HEIF arrive converted to JPEG; name the file to match.
+    if (mimeType === 'image/jpeg' && /\.(heic|heif)$/i.test(originalFileName)) {
+      originalFileName = originalFileName.replace(/\.(heic|heif)$/i, '.jpg');
+    }
+
+    // Audio/video: remove metadata (location, device, chapters) before it
+    // is stored. See methods/files/stripMediaMetadata.js.
+    if (!buffer) {
+      try {
+        const cleaned = await stripMediaMetadata(tempPath, mimeType);
+        if (cleaned) {
+          req.strippedPath = cleaned;
+          tempPath = cleaned;
+          tempSize = (await stat(cleaned)).size;
+        }
+      } catch (err) {
+        setStatus(415);
+        set('error', err.message);
+        return;
+      }
     }
 
     // Cap raster images to MAX_IMAGE_DIMENSION on the long edge.

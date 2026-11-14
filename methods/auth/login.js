@@ -32,7 +32,7 @@ export default async function login(input, maybePassword = "") {
   const query = actorId ? { id: actorId } : { username, originDomain: getSetting("domain") };
   const userDoc = await User.findOne(query)
     .select(
-      "id username type profile prefs publicKey password lastLogin circles emailVerified active"
+      "id username type profile prefs publicKey password lastLogin circles email emailVerified active"
     )
     .lean(false); // need a Mongoose doc to call instance methods
 
@@ -75,6 +75,9 @@ export default async function login(input, maybePassword = "") {
     groups: uo.circles?.groups,
     isServerAdmin: !!(await isServerAdmin(uo.id)),
     isServerMod: !!(await isServerModerator(uo.id)),
+    // Own email, for Settings (same as /auth/me).
+    email: uo.email || null,
+    emailVerified: !!uo.emailVerified,
   };
 
   return { user, token };

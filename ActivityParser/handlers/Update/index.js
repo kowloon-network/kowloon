@@ -319,6 +319,18 @@ export default async function Update(activity) {
         }
         delete patch.username;
       }
+      // Your own email changes go through POST /auth/change-email, which
+      // asks for your password: the email address is how an account is
+      // recovered, so a stolen session mustn't be able to repoint it.
+      // (Admins editing someone else's account still use this path.)
+      if ("email" in patch && isOwner) {
+        const unchanged =
+          typeof patch.email === "string" &&
+          patch.email.trim().toLowerCase() === String(current.email || "").toLowerCase();
+        if (!unchanged) {
+          return { activity, error: "Update: change your email in Settings (it needs your password)" };
+        }
+      }
       if ("email" in patch) {
         const newEmail =
           typeof patch.email === "string" ? patch.email.trim().toLowerCase() : "";
