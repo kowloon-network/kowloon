@@ -58,7 +58,8 @@
     "sanitize-html": "^2.18.1",
     "serve-static": "^2.2.1",
     "sharp": "^0.35.5",
-    "winston": "^3.14.2"
+    "winston": "^3.14.2",
+    "yazl": "^3.3.1"
   },
   "overrides": {
     "@babel/core": "^7.29.6",

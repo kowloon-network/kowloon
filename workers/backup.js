@@ -11,6 +11,7 @@ import {
   queueDueBackups, pruneScheduled, notifyBackupFailed, getSchedule,
   adoptOrphanArchives, keepFinishedBackups,
 } from '#methods/backup/manage.js'
+import { pollExportOnce, pruneExports } from '#methods/export/jobs.js'
 import logger from '#methods/utils/logger.js'
 import redactUri from '#methods/utils/redactUri.js'
 
@@ -191,6 +192,7 @@ async function main() {
   logger.info('[backup-worker] Polling for jobs')
 
   let lastScheduleCheck = 0
+  let lastExportPrune = 0
   while (running) {
     try {
       // Automatic backups (Settings -> Maintenance): check once a minute.
@@ -201,6 +203,18 @@ async function main() {
       await pollOnce()
     } catch (err) {
       logger.error('[backup-worker] Poll error', { error: err.message })
+    }
+    // "Download my data" exports share this worker: same tools, same
+    // storage, and like backups they're too big to build inside a request.
+    try {
+      if (Date.now() - lastExportPrune >= 60 * 60 * 1000) {
+        lastExportPrune = Date.now()
+        const pruned = await pruneExports()
+        if (pruned) logger.info('[backup-worker] Pruned expired data exports', { pruned })
+      }
+      await pollExportOnce()
+    } catch (err) {
+      logger.error('[backup-worker] Export poll error', { error: err.message })
     }
     await new Promise((r) => setTimeout(r, POLL_MS))
   }

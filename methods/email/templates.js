@@ -93,6 +93,23 @@ export function backupReadyEmail({ pageUrl, kind = 'full', size }) {
   };
 }
 
+export function exportReadyEmail({ pageUrl, days = 7 }) {
+  const domain = getSetting("domain") || "localhost";
+  const siteName = getSetting("profile")?.name || "Kowloon";
+
+  const content = `
+    <p>The copy of your data from <strong>${siteName}</strong> is ready.</p>
+    <p>Sign in and download it from your settings page. It stays there for ${days} days, then it's deleted.</p>
+    <p><a class="btn" href="${pageUrl}">Open settings</a></p>
+    <p>If you didn't ask for this, someone may have your password: change it from the same page.</p>
+  `;
+
+  return {
+    subject: `Your ${siteName} data is ready to download`,
+    html: baseLayout(siteName, domain, content),
+  };
+}
+
 export function backupFailedEmail({ pageUrl, kind = 'full', scheduled = false, error }) {
   const domain = getSetting("domain") || "localhost";
   const siteName = getSetting("profile")?.name || "Kowloon";

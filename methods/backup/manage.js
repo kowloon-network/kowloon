@@ -264,7 +264,7 @@ export async function backupSummary() {
     const dbGuess = Math.round(dataSize / 4)
     if (dbEstimate == null) dbEstimate = dbGuess
     if (fullEstimate == null) {
-      const files = (await listWithSizes(storage)).filter((o) => !o.key.startsWith('_backups/') && !o.key.startsWith('_restore-tmp/'))
+      const files = (await listWithSizes(storage)).filter((o) => !o.key.startsWith('_backups/') && !o.key.startsWith('_restore-tmp/') && !o.key.startsWith('_exports/'))
       fullEstimate = (dbEstimate ?? dbGuess) + files.reduce((n, o) => n + o.size, 0)
     }
   }

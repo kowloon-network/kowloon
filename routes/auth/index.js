@@ -9,6 +9,8 @@ import changeEmailRouter from "./change-email.js";
 import verifyEmailRouter from "./verify-email.js";
 import resendVerificationRouter from "./resend-verification.js";
 import meRoute from "./me.js";
+import exportRouter from "./export.js";
+import signOutEverywhereRouter from "./sign-out-everywhere.js";
 import { strictRateLimiter } from "../middleware/rateLimiter.js";
 
 const router = express.Router({ mergeParams: true });
@@ -19,6 +21,12 @@ router.get("/me", meRoute);
 // verify-email uses GET with a token in the query string — no rate limit needed here
 // since tokens are single-use 32-byte random values
 router.use("/", verifyEmailRouter);
+
+// Data export: the settings page polls the status while the zip builds, and
+// the download link is HMAC-checked -- neither belongs under the strict
+// login limiter. Asking for a new export is limited per person in
+// methods/export/jobs.js (one an hour).
+router.use("/", exportRouter);
 
 router.use(strictRateLimiter);
 
@@ -35,6 +43,7 @@ router.use("/", resetPasswordRouter);
 router.use("/", changePasswordRouter);
 router.use("/", deleteAccountRouter);
 router.use("/", changeEmailRouter);
+router.use("/", signOutEverywhereRouter);
 router.use("/", resendVerificationRouter);
 
 export default router;

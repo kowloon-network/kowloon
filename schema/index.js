@@ -15,6 +15,7 @@ import Outbox from "./Outbox.js";
 import File from "./File.js";
 import MediaJob from "./MediaJob.js";
 import BackupJob from "./BackupJob.js";
+import ExportJob from "./ExportJob.js";
 import FeedItems from "./FeedItems.js";
 import FeedFanOut from "./FeedFanOut.js";
 import SignatureNonce from "./SignatureNonce.js";
@@ -53,6 +54,7 @@ export {
   Theme,
   MediaJob,
   BackupJob,
+  ExportJob,
   DiscoverySection,
   Discovery,
   PushToken,

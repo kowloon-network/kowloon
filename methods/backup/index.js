@@ -149,7 +149,7 @@ export async function runBackup(job, updateProgress) {
     if (!databaseOnly) {
     await updateProgress('Downloading files', 30)
     const allKeys = await storage.listAllObjects()
-    fileKeys = allKeys.filter((k) => !k.startsWith('_backups/') && !k.startsWith('_restore-tmp/'))
+    fileKeys = allKeys.filter((k) => !k.startsWith('_backups/') && !k.startsWith('_restore-tmp/') && !k.startsWith('_exports/'))
 
     logger.info(`[backup] Downloading ${fileKeys.length} files`)
 

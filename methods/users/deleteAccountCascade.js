@@ -31,6 +31,7 @@ import {
   Settings,
   User,
 } from "#schema";
+import { deleteExportsFor } from "#methods/export/jobs.js";
 import { syncTargetReactState } from "#ActivityParser/handlers/React/index.js";
 import { getStorageAdapter } from "#methods/files/index.js";
 
@@ -193,6 +194,9 @@ export default async function deleteAccountCascade(actorId, opts = {}) {
   // Flags they filed -- not meaningful once they're gone. Flags filed
   // AGAINST them are left as a historical moderation record, on purpose.
   await Flag.deleteMany({ actorId });
+
+  // Any "Download my data" zips still waiting to be collected.
+  await deleteExportsFor(actorId);
 
   await User.deleteOne({ id: actorId });
 
