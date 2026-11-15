@@ -90,6 +90,11 @@ const UserSchemaDef = {
       abuse: { type: String, enum: ["show", "warn", "hide"], default: "warn" },
       medical: { type: String, enum: ["show", "warn", "hide"], default: "warn" },
       flashing: { type: String, enum: ["show", "warn", "hide"], default: "warn" },
+      drugs: { type: String, enum: ["show", "warn", "hide"], default: "warn" },
+      eating: { type: String, enum: ["show", "warn", "hide"], default: "warn" },
+      bigotry: { type: String, enum: ["show", "warn", "hide"], default: "warn" },
+      animals: { type: String, enum: ["show", "warn", "hide"], default: "warn" },
+      phobias: { type: String, enum: ["show", "warn", "hide"], default: "warn" },
     },
     // Show photos and video marked sensitive without blurring them.
     showSensitiveMedia: { type: Boolean, default: false },

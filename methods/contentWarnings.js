@@ -21,6 +21,11 @@ export const CW_CATEGORY_KEYS = [
   "abuse",
   "medical",
   "flashing",
+  "drugs",
+  "eating",
+  "bigotry",
+  "animals",
+  "phobias",
 ];
 
 const NOTE_MAX = 140;
@@ -76,6 +81,11 @@ const LABELS = {
   abuse: "abuse",
   medical: "medical",
   flashing: "flashing images",
+  drugs: "drugs and alcohol",
+  eating: "eating and weight",
+  bigotry: "bigotry or slurs",
+  animals: "animal harm",
+  phobias: "phobias",
 };
 
 export function hasContentWarning(obj) {
