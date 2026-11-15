@@ -52,7 +52,7 @@ const SEARCHABLE = {
     model: Post,
     // `actor` is the embedded author subdoc the post cards render (avatar +
     // name); without it clients fall back to the bare handle.
-    select: "id type title summary body url actor actorId tags to createdAt",
+    select: "id type title summary body url actor actorId tags to createdAt contentWarning sensitive",
   },
   Page: {
     model: Page,

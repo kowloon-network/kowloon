@@ -86,6 +86,11 @@ function shapeCard(refType, doc, note, { domain, protocol, restricted }) {
           ? { id: doc.actorId, name: doc.actor.name, icon: doc.actor.icon }
           : { id: doc.actorId },
         url: doc.url || null,
+        actorId: doc.actorId || null,
+        // Content warning (methods/contentWarnings.js): the card shows the
+        // warning in place of text and picture, per the reader's choices.
+        contentWarning: doc.contentWarning || null,
+        sensitive: doc.sensitive === true,
       };
     }
     case "Circle":
