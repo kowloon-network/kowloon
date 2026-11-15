@@ -1,6 +1,7 @@
 // /ActivityParser/handlers/Update/index.js
 
 import { isEmailBanned } from "#methods/moderation/blocklist.js";
+import { applyContentWarningFields, CW_CATEGORY_KEYS } from "#methods/contentWarnings.js";
 import bcrypt from "bcryptjs";
 import crypto from "crypto";
 import {
@@ -77,8 +78,8 @@ const MODELS = {
 // Anything not in the set is silently stripped before the $set.
 const ALLOWED_FIELDS = {
   User:     new Set(["profile", "prefs", "to", "canReply", "canReact", "email", "username"]),
-  Post:     new Set(["title", "source", "type", "tags", "to", "canReply", "canReact", "image", "attachments", "href", "target", "location", "event"]),
-  Reply:    new Set(["source", "tags", "attachments"]),
+  Post:     new Set(["title", "source", "type", "tags", "to", "canReply", "canReact", "image", "attachments", "href", "target", "location", "event", "contentWarning", "sensitive"]),
+  Reply:    new Set(["source", "tags", "attachments", "contentWarning", "sensitive"]),
   Page:     new Set(["title", "source", "slug", "tags", "to", "canReply", "canReact", "image", "attachments", "href", "parentId", "order"]),
   Bookmark: new Set(["title", "summary", "source", "type", "tags", "to", "canReply", "canReact", "href", "target", "parentFolder", "image"]),
   Circle:   new Set(["name", "summary", "icon", "to", "canReply", "canReact"]),
@@ -299,6 +300,19 @@ export default async function Update(activity) {
       }
     }
 
+    // Content warning: normalize; an author edit replaces a moderator's
+    // warning only by setting their own (addedBy is cleared, never client-set).
+    if (activity.object && typeof activity.object === "object" && (parsed.type === "Post" || parsed.type === "Reply")) {
+      applyContentWarningFields(activity.object);
+      if (activity.object.contentWarning) delete activity.object.contentWarning.addedBy;
+      // A warning a moderator added stays until staff change it: the author
+      // can't edit it away (the composer sends it back unchanged anyway).
+      if (current.contentWarning?.addedBy && !isAdmin && !(await isServerModerator(activity.actorId))) {
+        delete activity.object.contentWarning;
+        if (current.sensitive) delete activity.object.sensitive;
+      }
+    }
+
     // 4. Strip disallowed fields from the patch
     const patch = filterPatch(parsed.type, activity.object);
 
@@ -402,6 +416,16 @@ export default async function Update(activity) {
     }
     if (patch.prefs && typeof patch.prefs === 'object') {
       for (const [k, v] of Object.entries(patch.prefs)) {
+        // Per-category content-warning choices: set each one, so changing
+        // one category never resets the others.
+        if (k === 'contentWarnings' && v && typeof v === 'object' && !Array.isArray(v)) {
+          for (const [cat, choice] of Object.entries(v)) {
+            if (CW_CATEGORY_KEYS.includes(cat) && ['show', 'warn', 'hide'].includes(choice)) {
+              patch[`prefs.contentWarnings.${cat}`] = choice;
+            }
+          }
+          continue;
+        }
         patch[`prefs.${k}`] = v;
       }
       delete patch.prefs;

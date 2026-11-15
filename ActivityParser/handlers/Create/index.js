@@ -1,5 +1,6 @@
 // /ActivityParser/handlers/Create/index.js
 
+import { applyContentWarningFields } from "#methods/contentWarnings.js";
 import {
   Bookmark,
   Circle,
@@ -450,6 +451,17 @@ export default async function Create(activity) {
         activity.object.canReply = activity.object.to;
         activity.object.canReact = activity.object.to;
       }
+    }
+
+    // Content warning: known categories only, short note, never addedBy
+    // (that marks a moderator's warning and is set only by the admin route).
+    if (type === "Post") {
+      applyContentWarningFields(activity.object);
+      if (activity.object.contentWarning) delete activity.object.contentWarning.addedBy;
+      else delete activity.object.contentWarning;
+    } else {
+      delete activity.object.contentWarning;
+      delete activity.object.sensitive;
     }
 
     // Normalize location to GeoPoint format

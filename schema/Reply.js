@@ -60,6 +60,21 @@ const ReplySchema = new Schema(
     to: { type: String, default: "" },
     canReply: { type: String, default: "" },
     canReact: { type: String, default: "" },
+    // Content warning (methods/contentWarnings.js): fixed categories the
+    // reader can show/warn/hide, an optional note, and who added it when it
+    // wasn't the author (a moderator). sensitive = blur photos and video.
+    contentWarning: {
+      type: new mongoose.Schema(
+        {
+          categories: { type: [String], default: [] },
+          note: { type: String, default: "" },
+          addedBy: { type: String, default: undefined },
+        },
+        { _id: false }
+      ),
+      default: undefined,
+    },
+    sensitive: { type: Boolean, default: false },
 
     parent: { type: String, default: null },
     href: { type: String },

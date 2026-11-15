@@ -3,6 +3,7 @@
 // Used by bot-detection middleware to populate <head> tags for crawlers.
 
 import { FeedItems, User, Group, Page } from "#schema";
+import { hasContentWarning, contentWarningText } from "#methods/contentWarnings.js";
 import { getSetting } from "#methods/settings/cache.js";
 import { gateUserProfile } from "#methods/sanitize/object.js";
 import resolveRequestDomain from "./resolveRequestDomain.js";
@@ -73,9 +74,13 @@ export async function fetchMeta(pathname, req) {
     const item = await FeedItems.findOne({ id: postId, to: "public", tombstoned: { $ne: true } }).lean();
     if (!item) return defaults;
     const obj = item.object ?? {};
-    const title = obj.name || obj.title || (item.type === "Note" ? "Note" : item.type) || "Post";
-    const description = excerpt(obj.source?.content || obj.body || obj.content || "");
-    const image = resolveImageUrl(obj.image, domain, proto) || siteHero || siteIcon;
+    // Behind a content warning: the shared link shows the warning, not the
+    // post's words, title or picture (methods/contentWarnings.js).
+    const cw = hasContentWarning(obj);
+    const plainTitle = obj.name || obj.title || (item.type === "Note" ? "Note" : item.type) || "Post";
+    const title = cw ? `${item.type === "Note" || !item.type ? "Post" : item.type} with a content warning` : plainTitle;
+    const description = cw ? contentWarningText(obj) : excerpt(obj.source?.content || obj.body || obj.content || "");
+    const image = (cw || obj.sensitive ? null : resolveImageUrl(obj.image, domain, proto)) || siteHero || siteIcon;
     const authorName = obj.actor?.name || obj.actor?.preferredUsername || item.actorId;
     const url = `${base}${pathname}`;
 

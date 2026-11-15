@@ -21,6 +21,7 @@ import sectionsRouter from "./sections.js";
 import discoveryRouter from "./discovery.js";
 import serversRouter from "./servers.js";
 import blocklistRouter from "./blocklist.js";
+import contentWarningRouter from "./contentWarning.js";
 
 const router = express.Router({ mergeParams: true });
 
@@ -100,5 +101,6 @@ router.use("/sections", sectionsRouter);
 router.use("/discovery", discoveryRouter);
 router.use("/servers", serversRouter);
 router.use("/blocklist", blocklistRouter);
+router.use("/content-warning", contentWarningRouter);
 
 export default router;

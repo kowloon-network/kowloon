@@ -78,6 +78,21 @@ const UserSchemaDef = {
     // "system" default are left as-is — no way to tell whether that was a
     // real choice, so it's not worth guessing.
     theme: { type: String },
+    // Content warnings, per category: "show" | "warn" (tap to show) | "hide"
+    // (collapsed to a one-line "hidden" notice). Keys match CW_CATEGORY_KEYS
+    // in methods/contentWarnings.js. Unset = "warn".
+    contentWarnings: {
+      spoilers: { type: String, enum: ["show", "warn", "hide"], default: "warn" },
+      violence: { type: String, enum: ["show", "warn", "hide"], default: "warn" },
+      sexual: { type: String, enum: ["show", "warn", "hide"], default: "warn" },
+      death: { type: String, enum: ["show", "warn", "hide"], default: "warn" },
+      selfharm: { type: String, enum: ["show", "warn", "hide"], default: "warn" },
+      abuse: { type: String, enum: ["show", "warn", "hide"], default: "warn" },
+      medical: { type: String, enum: ["show", "warn", "hide"], default: "warn" },
+      flashing: { type: String, enum: ["show", "warn", "hide"], default: "warn" },
+    },
+    // Show photos and video marked sensitive without blurring them.
+    showSensitiveMedia: { type: Boolean, default: false },
     notifications: {
       reply: { type: Boolean, default: true },
       react: { type: Boolean, default: true },

@@ -180,6 +180,21 @@ const PostSchema = new Schema(
     to: { type: String, default: "" },
     canReply: { type: String, default: "" },
     canReact: { type: String, default: "" },
+    // Content warning (methods/contentWarnings.js): fixed categories the
+    // reader can show/warn/hide, an optional note, and who added it when it
+    // wasn't the author (a moderator). sensitive = blur photos and video.
+    contentWarning: {
+      type: new mongoose.Schema(
+        {
+          categories: { type: [String], default: [] },
+          note: { type: String, default: "" },
+          addedBy: { type: String, default: undefined },
+        },
+        { _id: false }
+      ),
+      default: undefined,
+    },
+    sensitive: { type: Boolean, default: false },
     deletedAt: { type: Date, default: null }, // If this post was deleted, this is when it was deleted. If it's not set the post is not deleted
     deletedBy: { type: String, default: null }, // I`f the activity is deleted, who deleted it (usually the user unless an admin does it)
     signature: Buffer, // The creator's public signature for verification

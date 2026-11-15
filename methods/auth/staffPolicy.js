@@ -6,6 +6,7 @@
 //
 //                                             Moderator   Admin
 //   Reports: see, ignore, remove, delete        yes        yes
+//   Add/change content warnings on posts        yes        yes
 //   Block a remote person or server             yes        yes
 //   Defederate / un-defederate a server         yes (1)    yes
 //   Close / restore a member's account          yes        yes
@@ -60,7 +61,9 @@ const MOD_ROUTES = [
   ["GET", /^\/system\/?$/],
   // Reports
   ["GET", /^\/flagged(\/[^/]+)?\/?$/],
-  ["POST", /^\/flagged\/[^/]+\/(ignore|remove|hard-delete|block)\/?$/],
+  ["POST", /^\/flagged\/[^/]+\/(ignore|remove|hard-delete|block|content-warning)\/?$/],
+  // Content warnings on any post or reply (agreed 2026-11-15)
+  ["POST", /^\/content-warning\/?$/],
   // Blocked / Defederated lists (bans, email lists and list visibility are
   // refused below or in the route)
   ["GET", /^\/blocklist\/?$/],

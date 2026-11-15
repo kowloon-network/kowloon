@@ -7,6 +7,7 @@ import createNotification from "#methods/notifications/create.js";
 import { getSetting } from "#methods/settings/cache.js";
 import { addToList, BlocklistError } from "#methods/moderation/blocklist.js";
 import { isStaff } from "#methods/auth/staffPolicy.js";
+import { applyModeratorWarning, notifyAuthorOfWarning } from "#methods/moderation/contentWarning.js";
 
 const router = express.Router({ mergeParams: true });
 
@@ -480,6 +481,69 @@ router.post(
 
       set("ok", true);
       set("flag", sanitize(flag.toObject()));
+    },
+    { allowUnauth: false }
+  )
+);
+
+// POST /admin/flagged/:id/content-warning { contentWarning, sensitive }
+// Put a content warning on the reported post or reply instead of removing
+// it, and resolve the flag. Notifies the reporter and the author.
+router.post(
+  "/:id/content-warning",
+  route(
+    async ({ req, params, body, user: adminUser, set, setStatus }) => {
+      const flag = await loadOpenFlag(params.id, setStatus, set);
+      if (!flag) return;
+      if (flag.targetType !== "Post" && flag.targetType !== "Reply") {
+        setStatus(400);
+        set("error", "Only posts and replies can have a content warning");
+        return;
+      }
+      const refusal = await modRefusal(req, flag);
+      if (refusal) {
+        setStatus(403);
+        set("error", refusal);
+        return;
+      }
+      if (!body?.contentWarning && body?.sensitive !== true) {
+        setStatus(400);
+        set("error", "Choose at least one warning, write a note, or mark the photos as sensitive");
+        return;
+      }
+
+      const result = await applyModeratorWarning({
+        targetId: flag.target,
+        contentWarning: body.contentWarning,
+        sensitive: body.sensitive,
+        staffId: adminUser.id,
+      });
+      if (!result.found) {
+        setStatus(404);
+        set("error", "The reported item no longer exists");
+        return;
+      }
+
+      flag.status = "resolved";
+      flag.resolvedAt = new Date();
+      flag.resolvedBy = adminUser.id;
+      await flag.save();
+
+      const href = hrefForTarget(flag.targetType, flag.target);
+      await createNotification({
+        type: "moderation",
+        recipientId: flag.actorId,
+        actorId: adminUser.id,
+        ...notifyObjectFields(flag),
+        summary: "Thanks for the report -- a moderator added a content warning to it.",
+        href,
+      });
+      await notifyAuthorOfWarning({ result, staffId: adminUser.id, targetId: flag.target, href });
+
+      set("ok", true);
+      set("flag", sanitize(flag.toObject()));
+      set("contentWarning", result.contentWarning);
+      set("sensitive", result.sensitive);
     },
     { allowUnauth: false }
   )

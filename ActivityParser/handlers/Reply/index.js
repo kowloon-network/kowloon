@@ -3,6 +3,7 @@
 // validates, creates the Reply doc, bumps replyCount on parent, federates if
 // remote, and creates a notification for the parent author.
 
+import { applyContentWarningFields } from "#methods/contentWarnings.js";
 import {
   Reply as ReplyModel,
   Post,
@@ -179,6 +180,17 @@ export default async function Reply(activity, ctx = {}) {
 
     if (!replyData.source.mediaType) {
       replyData.source.mediaType = "text/markdown";
+    }
+
+    // Content warning (methods/contentWarnings.js). The composer pre-fills
+    // the parent's warning; the author may change or clear it.
+    {
+      const cwFields = applyContentWarningFields({
+        contentWarning: activity.object.contentWarning,
+        sensitive: activity.object.sensitive,
+      });
+      if (cwFields.contentWarning) replyData.contentWarning = cwFields.contentWarning;
+      if (cwFields.sensitive) replyData.sensitive = true;
     }
 
     if (activity.object.attachments) {

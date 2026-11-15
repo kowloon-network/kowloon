@@ -1,5 +1,6 @@
 import express from "express";
 import { getPreviewFromContent } from "link-preview-js";
+import { hasContentWarning, contentWarningText } from "#methods/contentWarnings.js";
 import route from "../utils/route.js";
 import { isSafeUrl, safeFetch } from "#methods/utils/safeUrl.js";
 import { canView } from "#methods/feed/visibility.js";
@@ -283,19 +284,22 @@ router.get(
           if (mPost) {
             const postId = decodeURIComponent(mPost[1]);
             const post = await Post.findOne({ id: postId, deletedAt: null })
-              .select("title summary source image type")
+              .select("title summary source image type contentWarning sensitive")
               .lean();
             // SECURITY: only reveal a post's title/excerpt to a viewer who
             // could open it -- same check as GET /posts/:id (routes/posts/id.js).
             // Otherwise fall through to the generic site preview below.
             if (post && (await viewerCanSeeLocalPost(postId, user?.id || null))) {
               const body = post.source?.content || "";
+              // A post behind a warning previews as the warning, never its
+              // words or its picture (methods/contentWarnings.js).
+              const cw = hasContentWarning(post);
               set("url", url);
-              set("title", post.title || body.slice(0, 100) || null);
-              set("summary", post.summary || body.slice(0, 300) || null);
+              set("title", cw ? contentWarningText(post) : post.title || body.slice(0, 100) || null);
+              set("summary", cw ? null : post.summary || body.slice(0, 300) || null);
               set(
                 "image",
-                resolveImageUrl(post.image, domain, protocol) || serverAvatar || null
+                (cw || post.sensitive ? null : resolveImageUrl(post.image, domain, protocol)) || serverAvatar || null
               );
               set("favicon", serverAvatar || null);
               set("contentType", "text/html");
