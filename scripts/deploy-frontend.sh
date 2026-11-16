@@ -18,7 +18,7 @@
 set -euo pipefail
 
 # ── Configuration (override via environment) ─────────────────────────────────
-REPO="${GH_REPO:-jzellis/kowloon}"
+REPO="${GH_REPO:-kowloon-network/kowloon}"
 WORKFLOW="${GH_WORKFLOW:-docker.yml}"
 BRANCH="${GH_BRANCH:-main}"
 COMPOSE_DIR="${COMPOSE_DIR:-$(pwd)}"

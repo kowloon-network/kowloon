@@ -18,6 +18,11 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const app = express();
 const PORT = 2999;
 const CONFIG_DIR = process.env.CONFIG_DIR || "/config";
+// The app version this wizard installs. Baked into the setup image at build
+// time (setup/Dockerfile, from the release tag), so a 0.9.0 wizard installs a
+// 0.9.0 server and new installs stay put until their admin upgrades.
+const KOWLOON_VERSION = process.env.KOWLOON_VERSION || "latest";
+const APP_IMAGE = `ghcr.io/kowloon-network/kowloon:${KOWLOON_VERSION}`;
 
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
@@ -200,7 +205,7 @@ DISABLE_INPROCESS_OUTBOX_WORKER=true
   const sharedServices = `
   # ── Background workers ───────────────────────────────────────────────────────
   worker-outbox:
-    image: ghcr.io/jzellis/kowloon:latest
+    image: ${APP_IMAGE}
     restart: unless-stopped
     command: node workers/outboxPush.js
     env_file: .env
@@ -211,7 +216,7 @@ DISABLE_INPROCESS_OUTBOX_WORKER=true
       - internal
 
   worker-pull:
-    image: ghcr.io/jzellis/kowloon:latest
+    image: ${APP_IMAGE}
     restart: unless-stopped
     command: node workers/federationPull.js
     env_file: .env
@@ -222,7 +227,7 @@ DISABLE_INPROCESS_OUTBOX_WORKER=true
       - internal
 
   worker-media:
-    image: ghcr.io/jzellis/kowloon:latest
+    image: ${APP_IMAGE}
     restart: unless-stopped
     command: node workers/mediaProcessor.js
     env_file: .env
@@ -235,7 +240,7 @@ DISABLE_INPROCESS_OUTBOX_WORKER=true
       - internal
 
   worker-backup:
-    image: ghcr.io/jzellis/kowloon:latest
+    image: ${APP_IMAGE}
     restart: unless-stopped
     command: node workers/backup.js
     env_file: .env
@@ -286,6 +291,12 @@ DISABLE_INPROCESS_OUTBOX_WORKER=true
   mongo:
     image: mongo:7
     restart: unless-stopped
+    # Mongo keeps a file open per collection and index; Docker's default of
+    # 1024 runs out and Mongo crashes (exit 14, "Too many open files").
+    ulimits:
+      nofile:
+        soft: 64000
+        hard: 64000
     volumes:
       - mongo_data:/data/db
     healthcheck:
@@ -389,7 +400,7 @@ services:`;
   # Named "${appAlias}" (not "app") so it doesn't collide with the other stack's
   # "app" on the shared network. See COHOST-SETUP.md for the one-time wiring.
   ${appAlias}:
-    image: ghcr.io/jzellis/kowloon:latest
+    image: ${APP_IMAGE}
     restart: unless-stopped
     env_file: .env
     depends_on:
@@ -424,7 +435,7 @@ networks:
 
   # ── Application (includes web frontend) ─────────────────────────────────────
   app:
-    image: ghcr.io/jzellis/kowloon:latest
+    image: ${APP_IMAGE}
     restart: unless-stopped
     env_file: .env
     ports:
@@ -453,7 +464,7 @@ networks:
 
   # ── Application (includes web frontend) ─────────────────────────────────────
   app:
-    image: ghcr.io/jzellis/kowloon:latest
+    image: ${APP_IMAGE}
     restart: unless-stopped
     env_file: .env
     depends_on:

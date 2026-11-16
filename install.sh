@@ -9,8 +9,11 @@
 
 set -euo pipefail
 
-SETUP_IMAGE="ghcr.io/kowloon-network/kowloon-setup:latest"
-APP_IMAGE="ghcr.io/kowloon-network/kowloon:latest"
+# Which release to install. "stable" is the newest release; set
+# KOWLOON_VERSION=0.9.0 (say) for a specific one, or "latest" for the
+# untested main branch. The wizard pins the server to that exact version.
+KOWLOON_VERSION="${KOWLOON_VERSION:-stable}"
+SETUP_IMAGE="ghcr.io/kowloon-network/kowloon-setup:${KOWLOON_VERSION}"
 INSTALL_DIR="${1:-${KOWLOON_DIR:-$HOME/kowloon}}"
 SETUP_PORT=2999
 

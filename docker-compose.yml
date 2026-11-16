@@ -34,6 +34,12 @@ services:
   # ── MongoDB ──────────────────────────────────────────────────────────────────
   mongodb:
     image: mongo:7
+    # Default 1024 runs out (exit 14, "Too many open files"), especially with
+    # one test database per test file.
+    ulimits:
+      nofile:
+        soft: 64000
+        hard: 64000
     volumes:
       - mongodb_data:/data/db
     ports:
