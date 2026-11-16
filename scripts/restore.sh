@@ -9,7 +9,7 @@
 #
 # The restore uses the CURRENT installation's S3 credentials (.env), not
 # the backed-up credentials — so files upload to the new MinIO correctly.
-# All users will need to re-login after restore (new JWT_SECRET from installer).
+# Sign-in keys live in the database, so members stay signed in after a restore.
 
 set -euo pipefail
 
@@ -160,5 +160,5 @@ ok "All containers started"
 echo
 echo "  Restore complete."
 echo
-echo "  Note: All users will need to re-login — the JWT secret changed"
-echo "  when this installation was set up."
+echo "  Members' sign-ins carry over: the signing keys are restored with the"
+echo "  database. Restart the stack (docker compose up -d) if it was running."

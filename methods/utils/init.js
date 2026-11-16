@@ -166,10 +166,13 @@ export default async function init(Kowloon, ctx = {}) {
     console.error("Block list setup failed:", e.message);
   }
 
-  // 3) Create admin user from installer credentials (only if provided and no users exist)
+  // 3) Create the first admin from the installer's credentials -- only on a
+  // brand-new server with no accounts at all. Checking for the username
+  // alone brought a deleted admin back on the next restart, with the
+  // password from .env, and recreated it after restoring a backup.
   if (ctx.adminUsername && ctx.adminPassword) {
-    const firstUser = await User.findOne({ username: ctx.adminUsername }).lean();
-    if (!firstUser) {
+    const anyUser = await User.exists({});
+    if (!anyUser) {
       const adminUser = defaultUser(ctx);
       const created = await User.create(adminUser);
 

@@ -111,7 +111,18 @@ echo ""
 
 # ── Pull setup image ──────────────────────────────────────────────────────────
 info "Pulling Kowloon setup image..."
-docker pull "$SETUP_IMAGE"
+# Before the first release is tagged there is no "stable" image yet; fall
+# back to the main branch rather than failing, and say so.
+if ! docker pull "$SETUP_IMAGE"; then
+  if [[ "$KOWLOON_VERSION" == "stable" ]]; then
+    warn "No stable release published yet -- installing the latest development build."
+    KOWLOON_VERSION="latest"
+    SETUP_IMAGE="ghcr.io/kowloon-network/kowloon-setup:latest"
+    docker pull "$SETUP_IMAGE"
+  else
+    error "Couldn't download Kowloon version $KOWLOON_VERSION. Check the version number."
+  fi
+fi
 
 # ── Run setup container ───────────────────────────────────────────────────────
 info "Starting installation wizard..."
@@ -201,8 +212,10 @@ WAITED=0
 HEALTH_URL="https://${DOMAIN}/health"
 
 while true; do
-  STATUS=$(curl -sfk --max-time 5 "$HEALTH_URL" 2>/dev/null | python3 -c "import sys,json; d=json.load(sys.stdin); print('ok' if d.get('ok') or d.get('status')=='ok' else 'wait')" 2>/dev/null || echo "wait")
-  if [[ "$STATUS" == "ok" ]]; then
+  # 200 = up ("ok", or "degraded" while a worker is still starting);
+  # 503 = database or storage not reachable yet. No python needed.
+  CODE=$(curl -sk -o /dev/null -w "%{http_code}" --max-time 5 "$HEALTH_URL" 2>/dev/null || true)
+  if [[ "$CODE" == "200" ]]; then
     break
   fi
   if [[ $WAITED -ge $MAX_WAIT ]]; then
