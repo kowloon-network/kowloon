@@ -6,6 +6,7 @@ import "dotenv/config"
 import mongoose from 'mongoose'
 import { BackupJob, Settings } from '#schema'
 import { loadSettings } from '#methods/settings/cache.js'
+import { startHeartbeat } from '#methods/workers/heartbeat.js'
 import { runBackup, runRestore } from '#methods/backup/index.js'
 import {
   queueDueBackups, pruneScheduled, notifyBackupFailed, getSchedule,
@@ -161,6 +162,7 @@ async function main() {
     await mongoose.connect(MONGO_URI)
     logger.info('[backup-worker] MongoDB connected')
     await loadSettings(Settings)
+    startHeartbeat("backup")
     logger.info('[backup-worker] Settings loaded')
   } catch (err) {
     logger.error('[backup-worker] Startup failed', { error: err.message })

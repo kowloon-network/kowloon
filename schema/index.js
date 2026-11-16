@@ -15,6 +15,7 @@ import Outbox from "./Outbox.js";
 import File from "./File.js";
 import MediaJob from "./MediaJob.js";
 import BackupJob from "./BackupJob.js";
+import WorkerHeartbeat from "./WorkerHeartbeat.js";
 import ExportJob from "./ExportJob.js";
 import FeedItems from "./FeedItems.js";
 import FeedFanOut from "./FeedFanOut.js";
@@ -54,6 +55,7 @@ export {
   Theme,
   MediaJob,
   BackupJob,
+  WorkerHeartbeat,
   ExportJob,
   DiscoverySection,
   Discovery,

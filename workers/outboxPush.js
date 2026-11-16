@@ -8,6 +8,7 @@ import logger from "#methods/utils/logger.js";
 import redactUri from "#methods/utils/redactUri.js";
 import { Settings } from "#schema";
 import { loadSettings } from "#methods/settings/cache.js";
+import { startHeartbeat } from "#methods/workers/heartbeat.js";
 
 // Configuration from environment
 const MONGO_URI = process.env.MONGO_URI || "mongodb://localhost:27017/kowloon";
@@ -27,6 +28,7 @@ async function main() {
     await mongoose.connect(MONGO_URI);
     logger.info("Connected to MongoDB");
     await loadSettings(Settings);
+    startHeartbeat("outbox");
     logger.info("Settings cache loaded");
   } catch (err) {
     logger.error("MongoDB connection failed", {

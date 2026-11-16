@@ -7,6 +7,7 @@ import "dotenv/config";
 import mongoose from "mongoose";
 import { User, Circle, FederatedServer, Settings } from "#schema";
 import { getSetting, loadSettings } from "#methods/settings/cache.js";
+import { startHeartbeat } from "#methods/workers/heartbeat.js";
 import { isDefederated } from "#methods/moderation/federationPolicy.js";
 import { getServerSettings } from "#methods/settings/schemaHelpers.js";
 import Kowloon from "#kowloon";
@@ -409,6 +410,7 @@ async function main() {
 
     // Load settings cache
     await loadSettings(Settings);
+    startHeartbeat("pull");
     logger.info("federationPull: Settings loaded");
 
     // Start worker loop

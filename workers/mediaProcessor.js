@@ -12,6 +12,7 @@ import { join } from 'path'
 import { randomUUID } from 'crypto'
 import { MediaJob, File, Settings } from '#schema'
 import { loadSettings } from '#methods/settings/cache.js'
+import { startHeartbeat } from '#methods/workers/heartbeat.js'
 import { getMediaProcessor } from '#methods/media/index.js'
 import { getStorageAdapter } from '#methods/files/index.js'
 import patchAttachmentDimensions from '#methods/files/patchAttachmentDimensions.js'
@@ -193,6 +194,7 @@ async function main() {
     await mongoose.connect(MONGO_URI)
     logger.info('[media-worker] MongoDB connected')
     await loadSettings(Settings)
+    startHeartbeat("media")
     logger.info('[media-worker] Settings loaded')
   } catch (err) {
     logger.error('[media-worker] Startup failed', { error: err.message })
