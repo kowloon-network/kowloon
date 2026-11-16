@@ -71,7 +71,6 @@ make logs DOMAIN=kwln.org
 
 ## Next Steps
 
-- Read [MULTI_INSTANCE.md](MULTI_INSTANCE.md) for detailed docs
 - Check [DOCKER.md](DOCKER.md) for Docker basics
 - See `make help` for all commands
 

@@ -256,7 +256,6 @@ BASE=http://kowloon.net ADMIN_PASSWORD=12345 node index.js
 
 ## See Also
 
-- [MULTI_INSTANCE.md](MULTI_INSTANCE.md) - Multi-instance architecture
 - [QUICKSTART.md](QUICKSTART.md) - Quick start guide
 - [DOCKER.md](DOCKER.md) - Docker basics
 - kowloon-tests README - Test suite documentation
