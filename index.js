@@ -41,6 +41,18 @@ await initKowloon(Kowloon, {
   smtpPass: process.env.SMTP_PASS || undefined,
 });
 
+// New servers get Terms, Privacy and Rules pages from their first boot.
+// Only missing pages are created; edited or deleted ones are left alone.
+if (process.env.NODE_ENV !== "test") {
+  try {
+    const { ensureLegalPages } = await import("#methods/pages/legalPages.js");
+    const { created } = await ensureLegalPages();
+    if (created.length) console.log(`Created legal pages: ${created.join(", ")}`);
+  } catch (err) {
+    console.error("Couldn't create the legal pages:", err.message);
+  }
+}
+
 // 3) Now load methods (safe: DB is up)
 // await attachMethodDomains(Kowloon);
 
@@ -205,6 +217,8 @@ if (process.env.DISABLE_INPROCESS_OUTBOX_WORKER === "true") {
   );
   const workerInterval = Number(process.env.OUTBOX_WORKER_INTERVAL || 5000);
   startOutboxWorker(workerInterval);
+  const { startHeartbeat } = await import("#methods/workers/heartbeat.js");
+  startHeartbeat("outbox");
 } catch (err) {
   console.error("Failed to start outbox worker:", err.message);
 }

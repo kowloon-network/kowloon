@@ -237,8 +237,9 @@ const registerHandler = route(
     }
 
     // Terms of Service + Privacy Policy agreement. Only enforced when the
-    // server has actually published those pages -- a server that hasn't run
-    // seed-legal-pages.js shouldn't be unable to register anyone.
+    // server has those pages (created at first boot by
+    // methods/pages/legalPages.js) -- an admin who deleted them shouldn't
+    // leave the server unable to register anyone.
     // We record WHEN they agreed and the revision date of each document at
     // that moment, so it stays possible to say which text they agreed to
     // even after the pages are edited.
