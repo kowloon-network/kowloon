@@ -37,6 +37,17 @@ export async function seedAdminAndLogin() {
     await client.login(username, password);
   }
 
+  // Creating accounts through /outbox is admin-only, so make sure the seeded
+  // admin really is one (a member of the server's admin circle).
+  const { Settings, Circle } = await import("#schema");
+  const adminCircle = await Settings.findOne({ name: "adminCircle" }).lean();
+  if (adminCircle?.value) {
+    await Circle.updateOne(
+      { id: adminCircle.value, "members.id": { $ne: "@admin@kwln.org" } },
+      { $push: { members: { id: "@admin@kwln.org", name: "Admin" } } }
+    );
+  }
+
   return client;
 }
 
@@ -59,7 +70,7 @@ export async function createGroup(client, { name, summary }) {
   const { status, json } = await client.postOutbox({
     type: "Create",
     objectType: "Group",
-    object: { name, summary },
+    object: { type: "Group", name, summary },
     to: "@public",
   });
   if (status !== 200 && status !== 201)
@@ -70,23 +81,16 @@ export async function createGroup(client, { name, summary }) {
 }
 
 /** Ensure membership via Activity (member → then optional role) */
-export async function addMemberToGroup(client, { userId, groupId }) {
-  // Assuming your ActivityParser supports Add to the group's members circle.
-  // If your outbox handler expects "target" to be the circle id, get it via /groups/:id first.
-  const meta = await (
-    await fetch(client.baseURL + `/groups/${encodeURIComponent(groupId)}`)
-  ).json();
-  // meta doesn't include circle ids (by design), so in tests you can allow a test-only flag
-  // OR call a minimal internal endpoint. If not available, you can post a Join activity to the Group id:
-  const res = await client.postOutbox({
+// The member joins the group themselves -- the server always acts as the
+// logged-in user, so an admin can't Join on someone else's behalf. Test
+// groups are "open" by default, so the Join takes effect at once.
+export async function joinGroup(memberClient, { groupId }) {
+  const res = await memberClient.postOutbox({
     type: "Join",
     objectType: "Group",
-    object: { id: groupId },
-    actor: { id: userId },
-    to: groupId, // group-gated
+    target: groupId,
   });
   if (res.status >= 300)
-    throw new Error(
-      "addMember failed " + res.status + " " + JSON.stringify(res.json)
-    );
+    throw new Error("joinGroup failed " + res.status + " " + JSON.stringify(res.json));
+  return res.json;
 }

@@ -1,10 +1,8 @@
+// GET /groups/:id/members follows the group's own visibility (its `to`):
+// a public group's member list is visible to anyone who can see the group,
+// and it reflects joins as they happen.
 import { TestClient } from "../helpers/client.js";
-import {
-  seedAdminAndLogin,
-  createUser,
-  createGroup,
-  addMemberToGroup,
-} from "../helpers/seedApi.js";
+import { seedAdminAndLogin, createUser, createGroup, joinGroup } from "../helpers/seedApi.js";
 
 let admin;
 
@@ -12,52 +10,31 @@ beforeAll(async () => {
   admin = await seedAdminAndLogin();
 });
 
-test("members-only roster is enforced", async () => {
-  // Create a user and a group
+test("a public group's member list shows who has joined", async () => {
   await createUser(admin, { username: "alice", password: "pw", name: "Alice" });
   await createUser(admin, { username: "bob", password: "pw", name: "Bob" });
 
-  const groupCreate = await createGroup(admin, {
-    name: "Test Group",
-    summary: "hello",
-  });
+  const groupCreate = await createGroup(admin, { name: "Test Group", summary: "hello" });
+  const groupId = groupCreate?.result?.id || groupCreate?.activity?.objectId;
+  expect(groupId).toMatch(/^group:/);
 
-  // Extract the group id (from your Create response)
-  // If your outbox returns the created object, adapt accordingly:
-  const groupId =
-    groupCreate?.object?.id || groupCreate?.item?.id || groupCreate?.id;
-
-  // Login as Alice
   const alice = new TestClient({ baseURL: global.__TEST_BASE_URL__ });
   await alice.login("alice", "pw");
-
-  // Alice is NOT yet a member; members list should be forbidden
-  {
-    const { status } = await alice.request(
-      `/groups/${encodeURIComponent(groupId)}/members`
-    );
-    expect([403, 404]).toContain(status); // 403 if group visible, 404 if not
-  }
-
-  // Add Alice as a member via Activity
-  await addMemberToGroup(admin, { userId: "@alice@kwln.org", groupId });
-
-  // Now Alice can view members
-  {
-    const { status, json } = await alice.request(
-      `/groups/${encodeURIComponent(groupId)}/members`
-    );
-    expect(status).toBe(200);
-    expect(json.items?.some((m) => m.id === "@alice@kwln.org")).toBe(true);
-  }
-
-  // Bob (non-member) still forbidden
   const bob = new TestClient({ baseURL: global.__TEST_BASE_URL__ });
   await bob.login("bob", "pw");
-  {
-    const { status } = await bob.request(
-      `/groups/${encodeURIComponent(groupId)}/members`
-    );
-    expect([403, 404]).toContain(status);
-  }
+
+  const roster = async (client) => {
+    const { status, json } = await client.request(`/groups/${encodeURIComponent(groupId)}/members`);
+    expect(status).toBe(200);
+    return (json.members || []).map((m) => m.id);
+  };
+
+  expect(await roster(bob)).not.toContain("@alice@kwln.org");
+
+  await joinGroup(alice, { groupId });
+
+  // Alice sees herself, and so does Bob, who isn't a member.
+  expect(await roster(alice)).toContain("@alice@kwln.org");
+  expect(await roster(bob)).toContain("@alice@kwln.org");
+  expect(await roster(bob)).not.toContain("@bob@kwln.org");
 });

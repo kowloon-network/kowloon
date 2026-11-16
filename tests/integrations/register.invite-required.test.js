@@ -30,7 +30,11 @@ const createInvite = async (body) => {
   return json.invite;
 };
 
-const register = (body) => {
+// A real sign-up form ticks every server rule and accepts the terms; these
+// tests are about invites, so every request does the same.
+const register = async (body) => {
+  const rules = (await Settings.findOne({ name: "rules" }).lean())?.value || [];
+  body = { acknowledgedRules: rules.map((r) => r.id), acceptTerms: true, ...body };
   const c = new TestClient({ baseURL: global.__TEST_BASE_URL__ });
   return c.request("/register", { method: "POST", body }).then((r) => ({
     ...r,

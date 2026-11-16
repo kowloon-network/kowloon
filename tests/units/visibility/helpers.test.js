@@ -1,8 +1,26 @@
-import {
-  canSeeObject,
-  sanitizeAudience,
-  canInteract,
-} from "#methods/visibility/helpers.js";
+import { jest } from "@jest/globals";
+
+// canSeeObject looks a group up in the database when the viewer isn't a
+// member (a public group's content is visible to everyone). Unit tests have
+// no database, so stand in a tiny Group model with fixed groups.
+const GROUPS = {
+  "group:g1@kwln.org": { to: "@kwln.org" },
+  "group:other@kwln.org": { to: "circle:members@kwln.org" },
+  "group:open@kwln.org": { to: "@public" },
+};
+// Every other model is the real one (other modules import them by name);
+// "#schema/index.js" is a different specifier, so it isn't the mock.
+const realSchema = await import("#schema/index.js");
+jest.unstable_mockModule("#schema", () => ({
+  ...realSchema,
+  Group: {
+    findOne: ({ id }) => ({ select: () => ({ lean: async () => GROUPS[id] || null }) }),
+  },
+}));
+
+const { canSeeObject, sanitizeAudience, canInteract } = await import(
+  "#methods/visibility/helpers.js"
+);
 
 describe("Visibility Helpers", () => {
   const ctxKwln = {
@@ -97,8 +115,17 @@ describe("Visibility Helpers", () => {
       expect(await canSeeObject(null, ctxKwln)).toBe(false);
     });
 
-    test("object without 'to' field returns false", async () => {
-      expect(await canSeeObject({}, ctxKwln)).toBe(false);
+    test("group-scoped content in a public group is visible to everyone", async () => {
+      expect(await canSeeObject({ to: "group:open@kwln.org" }, ctxAnonymous)).toBe(true);
+      expect(await canSeeObject({ to: "group:open@kwln.org" }, ctxOtherDomain)).toBe(true);
+    });
+
+    // An object with no `to` is visible server-wide: to this server's own
+    // signed-in members only.
+    test("object without 'to' is visible to this server's members only", async () => {
+      expect(await canSeeObject({}, ctxKwln)).toBe(true);
+      expect(await canSeeObject({}, ctxOtherDomain)).toBe(false);
+      expect(await canSeeObject({}, ctxAnonymous)).toBe(false);
     });
   });
 

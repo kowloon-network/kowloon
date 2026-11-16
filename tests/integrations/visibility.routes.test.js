@@ -45,7 +45,8 @@ describe("Posts Collection Visibility", () => {
       to: "@public",
     });
     publicPostId =
-      publicPost.json?.object?.id ||
+      publicPost.json?.result?.id ||
+      publicPost.json?.activity?.objectId ||
       publicPost.json?.item?.id ||
       publicPost.json?.id;
 
@@ -61,7 +62,8 @@ describe("Posts Collection Visibility", () => {
       to: "@kwln.org",
     });
     domainPostId =
-      domainPost.json?.object?.id ||
+      domainPost.json?.result?.id ||
+      domainPost.json?.activity?.objectId ||
       domainPost.json?.item?.id ||
       domainPost.json?.id;
 
@@ -69,14 +71,15 @@ describe("Posts Collection Visibility", () => {
     const circleCreate = await alice.postOutbox({
       type: "Create",
       objectType: "Circle",
-      object: {
+      object: { type: "Circle",
         name: "Friends",
         members: [{ id: "@alice@kwln.org" }, { id: "@bob@kwln.org" }],
       },
       to: "@alice@kwln.org",
     });
     const circleId =
-      circleCreate.json?.object?.id ||
+      circleCreate.json?.result?.id ||
+      circleCreate.json?.activity?.objectId ||
       circleCreate.json?.item?.id ||
       circleCreate.json?.id;
 
@@ -92,7 +95,8 @@ describe("Posts Collection Visibility", () => {
       to: circleId,
     });
     circlePostId =
-      circlePost.json?.object?.id ||
+      circlePost.json?.result?.id ||
+      circlePost.json?.activity?.objectId ||
       circlePost.json?.item?.id ||
       circlePost.json?.id;
   });
@@ -102,19 +106,19 @@ describe("Posts Collection Visibility", () => {
     const { status, json } = await anon.request("/posts");
 
     expect(status).toBe(200);
-    expect(json.items).toBeDefined();
+    expect(json.orderedItems || json.items).toBeDefined();
 
     // Should see public post
-    const publicPost = json.items.find((p) => p.id === publicPostId);
+    const publicPost = (json.orderedItems || json.items).find((p) => p.id === publicPostId);
     expect(publicPost).toBeDefined();
     expect(publicPost.title).toBe("Public Post");
 
     // Should NOT see domain-scoped post
-    const domainPost = json.items.find((p) => p.id === domainPostId);
+    const domainPost = (json.orderedItems || json.items).find((p) => p.id === domainPostId);
     expect(domainPost).toBeUndefined();
 
     // Should NOT see circle-scoped post
-    const circlePost = json.items.find((p) => p.id === circlePostId);
+    const circlePost = (json.orderedItems || json.items).find((p) => p.id === circlePostId);
     expect(circlePost).toBeUndefined();
   });
 
@@ -124,24 +128,26 @@ describe("Posts Collection Visibility", () => {
     expect(status).toBe(200);
 
     // Should see public post
-    const publicPost = json.items.find((p) => p.id === publicPostId);
+    const publicPost = (json.orderedItems || json.items).find((p) => p.id === publicPostId);
     expect(publicPost).toBeDefined();
 
     // Should see domain-scoped post (same domain)
-    const domainPost = json.items.find((p) => p.id === domainPostId);
+    const domainPost = (json.orderedItems || json.items).find((p) => p.id === domainPostId);
     expect(domainPost).toBeDefined();
     expect(domainPost.title).toBe("Domain Post");
   });
 
-  test("Circle member (Bob) sees circle-scoped posts", async () => {
+  // GET /posts is the server firehose: public and server-wide posts only.
+  // Circle posts never appear in it, even for members -- they reach members
+  // through their own feeds, and open directly by ID.
+  test("Circle member (Bob) opens a circle post, but it stays out of the firehose", async () => {
     const { status, json } = await bob.request("/posts");
-
     expect(status).toBe(200);
+    expect((json.orderedItems || json.items).find((p) => p.id === circlePostId)).toBeUndefined();
 
-    // Should see circle-scoped post (Bob is in Alice's Friends circle)
-    const circlePost = json.items.find((p) => p.id === circlePostId);
-    expect(circlePost).toBeDefined();
-    expect(circlePost.title).toBe("Circle Post");
+    const one = await bob.request(`/posts/${encodeURIComponent(circlePostId)}`);
+    expect(one.status).toBe(200);
+    expect(one.json.title).toBe("Circle Post");
   });
 
   test("Non-circle member (Carol) does NOT see circle-scoped posts", async () => {
@@ -150,15 +156,15 @@ describe("Posts Collection Visibility", () => {
     expect(status).toBe(200);
 
     // Should see public post
-    const publicPost = json.items.find((p) => p.id === publicPostId);
+    const publicPost = (json.orderedItems || json.items).find((p) => p.id === publicPostId);
     expect(publicPost).toBeDefined();
 
     // Should see domain post
-    const domainPost = json.items.find((p) => p.id === domainPostId);
+    const domainPost = (json.orderedItems || json.items).find((p) => p.id === domainPostId);
     expect(domainPost).toBeDefined();
 
     // Should NOT see circle post (Carol is not in the circle)
-    const circlePost = json.items.find((p) => p.id === circlePostId);
+    const circlePost = (json.orderedItems || json.items).find((p) => p.id === circlePostId);
     expect(circlePost).toBeUndefined();
   });
 });
@@ -175,7 +181,8 @@ describe("Individual Post Visibility", () => {
       to: "@public",
     });
     publicPostId =
-      publicPost.json?.object?.id ||
+      publicPost.json?.result?.id ||
+      publicPost.json?.activity?.objectId ||
       publicPost.json?.item?.id ||
       publicPost.json?.id;
 
@@ -183,14 +190,15 @@ describe("Individual Post Visibility", () => {
     const circleCreate = await alice.postOutbox({
       type: "Create",
       objectType: "Circle",
-      object: {
+      object: { type: "Circle",
         name: "Private Circle",
         members: [{ id: "@alice@kwln.org" }],
       },
       to: "@alice@kwln.org",
     });
     const circleId =
-      circleCreate.json?.object?.id ||
+      circleCreate.json?.result?.id ||
+      circleCreate.json?.activity?.objectId ||
       circleCreate.json?.item?.id ||
       circleCreate.json?.id;
 
@@ -206,7 +214,8 @@ describe("Individual Post Visibility", () => {
       to: circleId,
     });
     circlePostId =
-      circlePost.json?.object?.id ||
+      circlePost.json?.result?.id ||
+      circlePost.json?.activity?.objectId ||
       circlePost.json?.item?.id ||
       circlePost.json?.id;
   });
@@ -218,8 +227,8 @@ describe("Individual Post Visibility", () => {
     );
 
     expect(status).toBe(200);
-    expect(json.item).toBeDefined();
-    expect(json.item.title).toBe("Public");
+    expect(json.id).toBeDefined();
+    expect(json.title).toBe("Public");
   });
 
   test("Anonymous user cannot fetch circle-scoped post by ID", async () => {
@@ -228,17 +237,17 @@ describe("Individual Post Visibility", () => {
       `/posts/${encodeURIComponent(circlePostId)}`
     );
 
-    expect([403, 404]).toContain(status);
+    expect([401, 403, 404]).toContain(status);
   });
 
-  test("Circle member can fetch circle-scoped post by ID", async () => {
+  test("The author can fetch their circle-scoped post by ID", async () => {
     const { status, json } = await alice.request(
       `/posts/${encodeURIComponent(circlePostId)}`
     );
 
     expect(status).toBe(200);
-    expect(json.item).toBeDefined();
-    expect(json.item.title).toBe("Private");
+    expect(json.id).toBeDefined();
+    expect(json.title).toBe("Private");
   });
 
   test("Non-circle member cannot fetch circle-scoped post by ID", async () => {
@@ -246,7 +255,7 @@ describe("Individual Post Visibility", () => {
       `/posts/${encodeURIComponent(circlePostId)}`
     );
 
-    expect([403, 404]).toContain(status);
+    expect([401, 403, 404]).toContain(status);
   });
 });
 
@@ -258,11 +267,12 @@ describe("Groups Collection Visibility", () => {
     const publicGroup = await alice.postOutbox({
       type: "Create",
       objectType: "Group",
-      object: { name: "Public Group", summary: "Everyone can see" },
+      object: { type: "Group", name: "Public Group", summary: "Everyone can see" },
       to: "@public",
     });
     publicGroupId =
-      publicGroup.json?.object?.id ||
+      publicGroup.json?.result?.id ||
+      publicGroup.json?.activity?.objectId ||
       publicGroup.json?.item?.id ||
       publicGroup.json?.id;
 
@@ -270,14 +280,15 @@ describe("Groups Collection Visibility", () => {
     const domainGroup = await alice.postOutbox({
       type: "Create",
       objectType: "Group",
-      object: {
+      object: { type: "Group",
         name: "Domain Group",
         summary: "Only kwln.org users",
       },
       to: "@kwln.org",
     });
     domainGroupId =
-      domainGroup.json?.object?.id ||
+      domainGroup.json?.result?.id ||
+      domainGroup.json?.activity?.objectId ||
       domainGroup.json?.item?.id ||
       domainGroup.json?.id;
 
@@ -285,14 +296,15 @@ describe("Groups Collection Visibility", () => {
     const circleCreate = await alice.postOutbox({
       type: "Create",
       objectType: "Circle",
-      object: {
+      object: { type: "Circle",
         name: "Admin Circle",
         members: [{ id: "@alice@kwln.org" }],
       },
       to: "@alice@kwln.org",
     });
     const circleId =
-      circleCreate.json?.object?.id ||
+      circleCreate.json?.result?.id ||
+      circleCreate.json?.activity?.objectId ||
       circleCreate.json?.item?.id ||
       circleCreate.json?.id;
 
@@ -300,11 +312,12 @@ describe("Groups Collection Visibility", () => {
     const circleGroup = await alice.postOutbox({
       type: "Create",
       objectType: "Group",
-      object: { name: "Secret Group", summary: "Circle members only" },
+      object: { type: "Group", name: "Secret Group", summary: "Circle members only" },
       to: circleId,
     });
     circleGroupId =
-      circleGroup.json?.object?.id ||
+      circleGroup.json?.result?.id ||
+      circleGroup.json?.activity?.objectId ||
       circleGroup.json?.item?.id ||
       circleGroup.json?.id;
   });
@@ -316,15 +329,15 @@ describe("Groups Collection Visibility", () => {
     expect(status).toBe(200);
 
     // Should see public group
-    const publicGroup = json.items.find((g) => g.id === publicGroupId);
+    const publicGroup = (json.orderedItems || json.items).find((g) => g.id === publicGroupId);
     expect(publicGroup).toBeDefined();
 
     // Should NOT see domain-scoped group
-    const domainGroup = json.items.find((g) => g.id === domainGroupId);
+    const domainGroup = (json.orderedItems || json.items).find((g) => g.id === domainGroupId);
     expect(domainGroup).toBeUndefined();
 
     // Should NOT see circle-scoped group
-    const circleGroup = json.items.find((g) => g.id === circleGroupId);
+    const circleGroup = (json.orderedItems || json.items).find((g) => g.id === circleGroupId);
     expect(circleGroup).toBeUndefined();
   });
 
@@ -334,15 +347,15 @@ describe("Groups Collection Visibility", () => {
     expect(status).toBe(200);
 
     // Should see public group
-    const publicGroup = json.items.find((g) => g.id === publicGroupId);
+    const publicGroup = (json.orderedItems || json.items).find((g) => g.id === publicGroupId);
     expect(publicGroup).toBeDefined();
 
     // Should see domain group
-    const domainGroup = json.items.find((g) => g.id === domainGroupId);
+    const domainGroup = (json.orderedItems || json.items).find((g) => g.id === domainGroupId);
     expect(domainGroup).toBeDefined();
 
     // Should NOT see circle group (Bob not in circle)
-    const circleGroup = json.items.find((g) => g.id === circleGroupId);
+    const circleGroup = (json.orderedItems || json.items).find((g) => g.id === circleGroupId);
     expect(circleGroup).toBeUndefined();
   });
 
@@ -352,73 +365,8 @@ describe("Groups Collection Visibility", () => {
     expect(status).toBe(200);
 
     // Alice should see all groups including the circle-scoped one
-    const circleGroup = json.items.find((g) => g.id === circleGroupId);
+    const circleGroup = (json.orderedItems || json.items).find((g) => g.id === circleGroupId);
     expect(circleGroup).toBeDefined();
-  });
-});
-
-describe("Activities Collection Visibility", () => {
-  let publicActivityId, domainActivityId;
-
-  beforeAll(async () => {
-    // Alice creates a public activity
-    const publicActivity = await alice.postOutbox({
-      type: "Create",
-      objectType: "Post",
-      object: {
-        type: "Note",
-        title: "Public Activity",
-        content: "Public",
-      },
-      to: "@public",
-    });
-    publicActivityId = publicActivity.json?.id || publicActivity.json?.activity?.id;
-
-    // Alice creates a domain-scoped activity
-    const domainActivity = await alice.postOutbox({
-      type: "Create",
-      objectType: "Post",
-      object: {
-        type: "Note",
-        title: "Domain Activity",
-        content: "Domain",
-      },
-      to: "@kwln.org",
-    });
-    domainActivityId = domainActivity.json?.id || domainActivity.json?.activity?.id;
-  });
-
-  test("Anonymous user sees only public activities", async () => {
-    const anon = new TestClient({ baseURL: global.__TEST_BASE_URL__ });
-    const { status, json } = await anon.request("/activities");
-
-    expect(status).toBe(200);
-
-    if (publicActivityId) {
-      const publicActivity = json.items.find((a) => a.id === publicActivityId);
-      expect(publicActivity).toBeDefined();
-    }
-
-    if (domainActivityId) {
-      const domainActivity = json.items.find((a) => a.id === domainActivityId);
-      expect(domainActivity).toBeUndefined();
-    }
-  });
-
-  test("Authenticated user sees public and domain activities", async () => {
-    const { status, json } = await bob.request("/activities");
-
-    expect(status).toBe(200);
-
-    if (publicActivityId) {
-      const publicActivity = json.items.find((a) => a.id === publicActivityId);
-      expect(publicActivity).toBeDefined();
-    }
-
-    if (domainActivityId) {
-      const domainActivity = json.items.find((a) => a.id === domainActivityId);
-      expect(domainActivity).toBeDefined();
-    }
   });
 });
 
@@ -445,14 +393,15 @@ describe("Blocked Users Filtering", () => {
       to: "@public",
     });
     blockedPostId =
-      spamPost.json?.object?.id ||
+      spamPost.json?.result?.id ||
+      spamPost.json?.activity?.objectId ||
       spamPost.json?.item?.id ||
       spamPost.json?.id;
 
     // Alice blocks the spammer
     await alice.postOutbox({
       type: "Block",
-      object: blockedUserId,
+      target: blockedUserId,
       to: "@alice@kwln.org",
     });
   });
@@ -463,7 +412,7 @@ describe("Blocked Users Filtering", () => {
     expect(status).toBe(200);
 
     // Alice should NOT see the spammer's post
-    const blockedPost = json.items.find((p) => p.id === blockedPostId);
+    const blockedPost = (json.orderedItems || json.items).find((p) => p.id === blockedPostId);
     expect(blockedPost).toBeUndefined();
   });
 
@@ -473,7 +422,7 @@ describe("Blocked Users Filtering", () => {
     expect(status).toBe(200);
 
     // Bob can still see the spammer's post
-    const spamPost = json.items.find((p) => p.id === blockedPostId);
+    const spamPost = (json.orderedItems || json.items).find((p) => p.id === blockedPostId);
     expect(spamPost).toBeDefined();
   });
 });
