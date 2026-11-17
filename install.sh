@@ -29,8 +29,20 @@ success() { echo -e "${GREEN}==> $*${RESET}"; }
 warn()    { echo -e "${YELLOW}==> WARNING: $*${RESET}"; }
 error()   { echo -e "${RED}==> ERROR: $*${RESET}" >&2; exit 1; }
 
-# ── Check Docker ──────────────────────────────────────────────────────────────
+# ── Check processor ───────────────────────────────────────────────────────────
 info "Checking requirements..."
+
+# Images are built for 64-bit Intel/AMD and 64-bit ARM (Raspberry Pi 5 and
+# similar). A 32-bit OS has no matching image, even on 64-bit hardware.
+case "$(uname -m)" in
+  x86_64|amd64|aarch64|arm64) ;;
+  armv7l|armv6l|armhf)
+    error "This is a 32-bit system. Kowloon needs a 64-bit operating system.\nOn a Raspberry Pi, install the 64-bit Raspberry Pi OS (a Pi 5 is recommended)." ;;
+  *)
+    error "Kowloon doesn't support this processor ($(uname -m)) yet. It runs on 64-bit Intel/AMD and 64-bit ARM." ;;
+esac
+
+# ── Check Docker ──────────────────────────────────────────────────────────────
 
 if ! command -v docker &>/dev/null; then
   if command -v apt-get &>/dev/null && ( [[ -f /etc/debian_version ]] || grep -qi "debian\|ubuntu" /etc/os-release 2>/dev/null ); then

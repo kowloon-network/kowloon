@@ -39,6 +39,8 @@ see **Before you upgrade**.
   when the database or storage is unreachable.
 - The installer pins your server to the release you installed. Set
   `KOWLOON_VERSION` to install a specific version.
+- Kowloon now runs on 64-bit ARM as well as Intel/AMD, so a Raspberry
+  Pi 5 can host a server.
 - An app Settings screen for server admins, with the email confirmation
   switch (in the next app build).
 
