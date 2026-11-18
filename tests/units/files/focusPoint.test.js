@@ -37,6 +37,15 @@ describe("detectFocus", () => {
     expect(focus.y).toBeGreaterThan(0.75);
   });
 
+  // Big JPEGs decode at a reduced scale; the point must still be right.
+  test("finds the subject in a large photo", async () => {
+    const focus = await detectFocus(await imageWithSubject(2560, 1706, 1700, 500));
+    expect(focus.x).toBeGreaterThan(0.6);
+    expect(focus.x).toBeLessThan(0.72);
+    expect(focus.y).toBeGreaterThan(0.2);
+    expect(focus.y).toBeLessThan(0.36);
+  });
+
   test("returns null for something that isn't an image", async () => {
     expect(await detectFocus(Buffer.from("not an image"))).toBeNull();
   });

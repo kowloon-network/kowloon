@@ -40,17 +40,22 @@ export function parseFocus(value) {
 export async function detectFocus(buffer) {
   try {
     const { default: sharp } = await import("sharp");
-    const meta = await sharp(buffer, { pages: 1 }).metadata();
-    const w = meta.width || 0;
-    const h = meta.pageHeight || meta.height || 0;
-    if (!w || !h) return null;
+    // Two passes. First shrink to a small copy whose short side is SIDE.
+    // Running the attention crop on the original instead reports its
+    // coordinates in whatever scale libvips decoded at (JPEG shrink-on-load
+    // varies by size), which pinned big photos' focus to the edges.
     const SIDE = 256;
-    const scale = SIDE / Math.min(w, h);
-    const { info } = await sharp(buffer, { pages: 1 })
+    const small = await sharp(buffer, { pages: 1 })
+      .resize(SIDE, SIDE, { fit: "outside" })
+      .raw()
+      .toBuffer({ resolveWithObject: true });
+    const { width: w, height: h, channels } = small.info;
+    if (!w || !h) return null;
+    const { info } = await sharp(small.data, { raw: { width: w, height: h, channels } })
       .resize(SIDE, SIDE, { fit: "cover", position: sharp.strategy.attention })
       .toBuffer({ resolveWithObject: true });
     if (!Number.isFinite(info.attentionX) || !Number.isFinite(info.attentionY)) return null;
-    return parseFocus({ x: info.attentionX / (w * scale), y: info.attentionY / (h * scale) });
+    return parseFocus({ x: info.attentionX / w, y: info.attentionY / h });
   } catch (err) {
     console.warn("[files/focusPoint] detection failed:", err.message);
     return null;

@@ -5,12 +5,15 @@
 // denormalized FeedItems copy -- so feeds can crop around the subject.
 // See methods/files/focusPoint.js.
 //
-// Idempotent: only touches images whose focus is still unset.
+// Idempotent: only touches images whose focus is still unset. --redo
+// recalculates every image (overwriting points posters chose), for fixing
+// a bad detection run.
 //
 // Usage:
 //   node scripts/backfill-image-focus.js              # dry run (counts only)
 //   node scripts/backfill-image-focus.js --write      # apply
 //   node scripts/backfill-image-focus.js --write --limit 50
+//   node scripts/backfill-image-focus.js --write --redo
 
 import "dotenv/config";
 import mongoose from "mongoose";
@@ -24,6 +27,7 @@ const RawFeed = mongoose.model("RawFeed", new mongoose.Schema({}, { strict: fals
 
 const args = process.argv.slice(2);
 const DRY_RUN = !args.includes("--write");
+const REDO = args.includes("--redo");
 const limitIdx = args.indexOf("--limit");
 const LIMIT = limitIdx >= 0 ? parseInt(args[limitIdx + 1], 10) : 0;
 
@@ -59,8 +63,8 @@ async function main() {
   const query = {
     mediaType: { $regex: /^image\//, $ne: "image/svg+xml" },
     storageKey: { $exists: true, $ne: null },
-    $or: [{ focus: null }, { focus: { $exists: false } }],
     deletedAt: null,
+    ...(REDO ? {} : { $or: [{ focus: null }, { focus: { $exists: false } }] }),
   };
   const cursor = RawFile.find(query).limit(LIMIT > 0 ? LIMIT : 0).lean().cursor();
 
