@@ -12,6 +12,7 @@ import MediaJob from '#schema/MediaJob.js';
 import { canonicalTo } from '#methods/parse/canonicalTo.js';
 import isServerAdmin from '#methods/auth/isServerAdmin.js';
 import getSettings from '#methods/settings/get.js';
+import { parseFocus, detectFocus } from '#methods/files/focusPoint.js';
 
 const MAX_IMAGE_DIMENSION = 2048
 // Video types that need async faststart processing
@@ -121,6 +122,14 @@ async function handleUpload({ req, body, user, setStatus, set }) {
       }
     }
 
+    // Focus point: the poster's tap in the composer wins; otherwise detect it.
+    // Raster images only (SVG has no pixels to look at; video is cropped
+    // centred). Runs after orientation is baked in so the axes match.
+    let focus = null;
+    if (buffer && mimeType.startsWith('image/') && mimeType !== 'image/svg+xml') {
+      focus = parseFocus(body.focus) || (await detectFocus(buffer));
+    }
+
     // Admins may specify an explicit actorId; otherwise use auth user
     let actorId = user.id;
     if (body.actorId && body.actorId !== user.id) {
@@ -196,6 +205,7 @@ async function handleUpload({ req, body, user, setStatus, set }) {
         size: result.metadata.size,
         width: result.metadata.width,
         height: result.metadata.height,
+        focus,
         storageKey: result.key,
         thumbnails,
         processingStatus: needsJob ? 'pending' : 'ready',
@@ -238,6 +248,7 @@ async function handleUpload({ req, body, user, setStatus, set }) {
         url: file.url,
         thumbnails: thumbnailUrls,
         processingStatus: file.processingStatus,
+        focus: file.focus ?? null,
         metadata: result.metadata,
       });
     } catch (error) {

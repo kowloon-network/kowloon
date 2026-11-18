@@ -18,6 +18,7 @@ import { File } from "#schema";
 import { buildFileUrl, isPublicVisibility } from "#methods/files/signedUrl.js";
 import { fileIdFromValue } from "#methods/files/fileRef.js";
 import { getSetting } from "#methods/settings/cache.js";
+import { parseFocus } from "#methods/files/focusPoint.js";
 
 export async function enrichAttachments(items, { protocol = "https" } = {}) {
   if (!Array.isArray(items) || items.length === 0) return items;
@@ -44,7 +45,7 @@ export async function enrichAttachments(items, { protocol = "https" } = {}) {
   const legacyMap = new Map();
   if (legacyFileIds.size > 0) {
     const files = await File.find({ id: { $in: [...legacyFileIds] } })
-      .select("id mediaType name summary width height")
+      .select("id mediaType name summary width height focus")
       .lean();
     for (const f of files) {
       legacyMap.set(f.id, {
@@ -55,6 +56,7 @@ export async function enrichAttachments(items, { protocol = "https" } = {}) {
         alt: f.summary ?? "",
         width: f.width ?? null,
         height: f.height ?? null,
+        focus: parseFocus(f.focus),
         restricted: restrictedLegacyIds.has(f.id),
       });
     }
@@ -66,6 +68,12 @@ export async function enrichAttachments(items, { protocol = "https" } = {}) {
     const imgFid = fileIdFromValue(item?.image);
     if (imgFid) {
       item.featuredImage = buildFileUrl({ fileId: imgFid, domain, protocol, restricted });
+      // Shape + focus so apps can size and crop the header image without
+      // waiting for it to load. Absent when the File isn't known locally.
+      const meta = legacyMap.get(imgFid);
+      if (meta) {
+        item.featuredImageInfo = { width: meta.width, height: meta.height, focus: meta.focus };
+      }
     } else if (typeof item?.image === "string" && item.image.startsWith("http")) {
       item.featuredImage = item.image;
     }
@@ -100,6 +108,7 @@ function resolveOne(a, { domain, protocol, restricted, legacyMap }) {
       alt: a.alt ?? "",
       width: a.width ?? null,
       height: a.height ?? null,
+      focus: parseFocus(a.focus),
     };
   }
 
@@ -118,6 +127,7 @@ function resolveOne(a, { domain, protocol, restricted, legacyMap }) {
           alt: entry.alt,
           width: entry.width,
           height: entry.height,
+          focus: entry.focus,
         };
       }
       return { url: buildFileUrl({ fileId: fid, domain, protocol, restricted }), fileId: fid, mediaType: "", kind: "file", name: "", alt: "", width: null, height: null };

@@ -7,6 +7,7 @@
 
 import { File } from "#schema";
 import { fileIdFromValue } from "./fileRef.js";
+import { parseFocus } from "./focusPoint.js";
 
 export function mapKind(mediaType) {
   const mt = String(mediaType || "");
@@ -30,7 +31,14 @@ function normalizeEntry(raw) {
     // `name` is the AS2 wire field (normalizeInboundActivity.js); `title` is
     // the client's create/update shape. mediaType is wire-carried metadata
     // (#53) — only meaningful as a fallback for a not-yet-hydrated remote file.
-    return { fileId, title: raw.title ?? raw.name, alt: raw.alt ?? raw.summary, mediaType: raw.mediaType };
+    // `focus` lets an edit screen move the focus point after posting.
+    return {
+      fileId,
+      title: raw.title ?? raw.name,
+      alt: raw.alt ?? raw.summary,
+      mediaType: raw.mediaType,
+      focus: parseFocus(raw.focus),
+    };
   }
   return null;
 }
@@ -43,7 +51,7 @@ export async function resolveAttachments(rawAttachments) {
 
   const fileIds = [...new Set(entries.map((e) => e.fileId))];
   const files = await File.find({ id: { $in: fileIds } })
-    .select("id mediaType name summary width height")
+    .select("id mediaType name summary width height focus")
     .lean();
   const fileMap = new Map(files.map((f) => [f.id, f]));
 
@@ -62,6 +70,7 @@ export async function resolveAttachments(rawAttachments) {
       alt: entry.alt ?? file?.summary ?? "",
       width: file?.width ?? null,
       height: file?.height ?? null,
+      focus: entry.focus ?? parseFocus(file?.focus),
     };
   });
 }

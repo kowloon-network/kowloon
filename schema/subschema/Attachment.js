@@ -23,6 +23,8 @@ const AttachmentSchema = new Schema(
     alt: { type: String, default: "" },
     width: { type: Number, default: null },
     height: { type: Number, default: null },
+    // Snapshot of File.focus (methods/files/focusPoint.js). null = centre.
+    focus: { type: new Schema({ x: Number, y: Number }, { _id: false }), default: null },
   },
   { _id: false }
 );

@@ -26,6 +26,10 @@ const FileSchema = new Schema(
     size: { type: Number }, // File size in bytes
     width: { type: Number }, // Image/video width in pixels
     height: { type: Number }, // Image/video height in pixels
+    // Where the subject is, as fractions of width/height (0,0 = top left).
+    // Set by the poster or detected at upload (methods/files/focusPoint.js);
+    // apps keep it in frame when they crop. null = centre.
+    focus: { type: new Schema({ x: Number, y: Number }, { _id: false }), default: null },
     blurhash: { type: String }, // BlurHash string for progressive loading
     processingStatus: {
       type: String,

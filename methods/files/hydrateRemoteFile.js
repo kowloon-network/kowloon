@@ -31,6 +31,7 @@ import { getStorageAdapter } from "#methods/files/index.js";
 import signHttpRequest from "#methods/federation/signHttpRequest.js";
 import { isSafeUrl, safeFetch } from "#methods/utils/safeUrl.js";
 import { ALLOWED_MIME_TYPES } from "#methods/files/validateUpload.js";
+import { parseFocus } from "#methods/files/focusPoint.js";
 
 // SECURITY: a remote origin's /meta response used to choose BOTH the URL we
 // fetch bytes from (no SSRF check -- any internal host) AND the Content-Type
@@ -166,6 +167,7 @@ export async function hydrateRemoteFile(fileId, { fetcher = safeFetch } = {}) {
       size: meta.size,
       width: meta.width,
       height: meta.height,
+      focus: parseFocus(meta.focus),
       storageKey: existing?.storageKey,
     };
   }
