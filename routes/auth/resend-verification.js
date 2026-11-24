@@ -19,9 +19,10 @@ const resendVerificationHandler = route(
 
     if (!email) return;
 
-    const requireEmailVerification = getSetting("requireEmailVerification") === true;
-    if (!requireEmailVerification) return;
-
+    // Not gated on requireEmailVerification: change-email sends a link
+    // whatever that setting is, so an unverified address must be able to ask
+    // for a fresh one too (the app's Email screen offers this). Still only
+    // for unverified addresses, and /auth is strictly rate-limited.
     const userDoc = await User.findOne({ email, emailVerified: false })
       .select("id email emailVerified emailVerificationToken emailVerificationExpires");
     if (!userDoc) return;
