@@ -592,7 +592,8 @@ export default async function Update(activity) {
     // 9. Federation — bookmarks are personal-only, never federated. Replies
     // and Reacts have empty `to` (visibility inherits from parent), so the
     // generic helper would return no targets — route via the parent's domain.
-    const federation = parsed.type === "Bookmark"
+    // Circles are private lists too -- never pushed (see Create handler).
+    const federation = parsed.type === "Bookmark" || parsed.type === "Circle"
       ? { shouldFederate: false }
       : parsed.type === "Reply" || parsed.type === "React"
       ? getChildFederationTargets(updated)

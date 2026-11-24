@@ -293,7 +293,8 @@ export default async function Delete(activity) {
     const primary = succeeded[0].deleted;
     activity.objectId = primary.id;
     const primaryType = succeeded[0].type || primary.objectType || primary.type;
-    const federation = primaryType === "Bookmark"
+    // Circles are private lists -- never pushed (see Create handler).
+    const federation = primaryType === "Bookmark" || primaryType === "Circle"
       ? { shouldFederate: false }
       : primaryType === "Reply" || primaryType === "React"
       ? getChildFederationTargets(primary)

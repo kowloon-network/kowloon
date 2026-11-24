@@ -187,6 +187,15 @@ export async function getFederationTargets(activity, created) {
     return { shouldFederate: false };
   }
 
+  // PRIVACY: Circles are never pushed. A circle's membership is the owner's
+  // private list; other servers see a circle only if they fetch one the
+  // owner has made visible (and that read path does its own checks). The
+  // generic addressing rules below would otherwise send a new Circle --
+  // members and all -- to every server its `to` names.
+  if (activity.objectType === "Circle" || created?.type === "Circle") {
+    return { shouldFederate: false };
+  }
+
   // Use the common helper based on the created object's addressing
   return getFederationTargetsHelper(activity, created);
 }

@@ -413,8 +413,17 @@ export default async function Add(activity) {
     // Deliver the Add to the home server(s) of any remote members — one or many.
     // Domain-scoped target; enqueueOutbox delivers to those servers' shared
     // inboxes without touching `activity.to`. Covers both Group and user Circles.
+    //
+    // PRIVACY: ONLY Group adds are ever sent anywhere. Adding someone to a
+    // personal Circle (Following, a user list) is private -- the person is
+    // never told, and their server must never learn which circle they're in
+    // (memory: feedback_no_follow_notifications). Server-owned circles (the
+    // admin Blocked/Defederated lists) are private moderation state too.
+    // This used to federate for every owner type; it was only stopped by an
+    // unrelated validation bug on the receiving side (found 2026-11-24).
+    const federateAdd = ownerType === "Group" && remoteMembers.length > 0;
     let federation;
-    if (remoteMembers.length > 0) {
+    if (federateAdd) {
       federation = getMultiFederationTargets(
         ...remoteMembers.map((m) => m.id),
       );
@@ -425,7 +434,7 @@ export default async function Add(activity) {
       circleId: activity.target,
       added: (res.modifiedCount || 0) > 0,
       addedCount: toAdd.length,
-      federate: remoteMembers.length > 0,
+      federate: federateAdd,
       federation,
     };
   } catch (err) {
