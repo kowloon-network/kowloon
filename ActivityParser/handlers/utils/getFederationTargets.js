@@ -40,12 +40,9 @@ export default async function getFederationTargets(activity, created) {
   }
 
   if (to?.startsWith("group:")) {
-    // Group: send to all members of the group
-    return {
-      shouldFederate: true,
-      scope: "group",
-      groupId: to,
-    };
+    // Groups are server-only for now (beta, 2026-11-24): nothing addressed
+    // to a group leaves this server. See ActivityParser/handlers/Join.
+    return { shouldFederate: false };
   }
 
   // Default: no federation

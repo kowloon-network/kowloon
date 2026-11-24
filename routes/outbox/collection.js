@@ -95,7 +95,10 @@ export default route(
       if (before) windowClauses.push({ publishedAt: { $lte: before } });
 
       const serverFroms = froms.filter(isServerEntry);
-      const groupFroms = froms.filter((f) => f.startsWith("group:"));
+      // Groups are server-only for now (beta, 2026-11-24; see the Join
+      // handler): group posts are never handed to another server. Step 4
+      // below stays for when cross-server groups come back.
+      const groupFroms = [];
       const userFroms = froms.filter((f) => !isServerEntry(f) && !f.startsWith("group:"));
 
       const baseFilter = {

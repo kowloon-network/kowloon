@@ -4,6 +4,8 @@
 
 import { Group, Circle, User } from "#schema";
 import getFederationTargetsHelper from "../utils/getFederationTargets.js";
+import kowloonId from "#methods/parse/kowloonId.js";
+import isLocalDomain from "#methods/parse/isLocalDomain.js";
 
 /**
  * Type-specific validation for Leave activities
@@ -49,19 +51,32 @@ export default async function Leave(activity) {
       return { activity, error: validation.errors.join("; ") };
     }
 
-    // ---- Resolve local target (Group). If not found → federate only. ----
-    const groupDoc = await Group.findOne({ id: activity.target });
-
-    if (!groupDoc) {
-      // Remote target → do not mutate locally; let upstream federate.
-      const federation = { shouldFederate: true };
+    // ---- Another server's group: decided by the id's domain, not by
+    // whether a Group doc exists here (remote groups can be cached locally).
+    // Groups are server-only for now (see the Join handler), so this is only
+    // ever someone getting out of a membership made before that: drop it from
+    // their Groups circle and tell the group's server, which still accepts
+    // Leave (routes/inbox/post.js).
+    const groupDomain = kowloonId(activity.target).domain;
+    if (groupDomain && !isLocalDomain(groupDomain)) {
+      const u = await User.findOne({ id: activity.actorId }).select("circles").lean();
+      if (u?.circles?.groups) {
+        await Circle.updateOne(
+          { id: u.circles.groups, "members.id": activity.target },
+          { $pull: { members: { id: activity.target } }, $inc: { memberCount: -1 } }
+        );
+      }
       return {
         activity,
         created: { federate: true },
-        result: { federate: true },
-        federation,
+        result: { left: true, remote: true },
+        federate: true,
+        federation: { shouldFederate: true, scope: "domain", domains: [groupDomain] },
       };
     }
+
+    const groupDoc = await Group.findOne({ id: activity.target });
+    if (!groupDoc) return { activity, error: "Leave: Group not found" };
 
     // ---- Deleted guard ----
     if (groupDoc?.deletedAt) {

@@ -24,6 +24,7 @@ export default async function Add(activity) {
     let targetCircle;
     let ownerId;
     let ownerType;
+    let groupCircles = null;
 
     if (activity.to && /^group:[^@]+@[^@]+$/.test(activity.to)) {
       // New pattern: to = groupId, target = optional specific circle
@@ -32,6 +33,7 @@ export default async function Add(activity) {
 
       ownerId = activity.to;
       ownerType = "Group";
+      groupCircles = group.circles || {};
 
       // If target is specified, verify it belongs to this group
       if (activity.target) {
@@ -205,6 +207,20 @@ export default async function Add(activity) {
     const resolved = (await Promise.all(objects.map(resolveActorToMember))).filter(Boolean);
 
     if (resolved.length === 0) return { activity, error: "Add: no valid members resolved" };
+
+    // GROUPS ARE SERVER-ONLY FOR NOW (beta, 2026-11-24; see the Join
+    // handler): people from other servers can't be put in a group -- except
+    // its Blocked circle, which keeps them out and stays on this server.
+    if (ownerType === "Group" && activity.target !== groupCircles?.blocked) {
+      const localDomain = settings?.domain || process.env.DOMAIN || "";
+      const outsider = resolved.find((m) => {
+        const d = m?.server?.replace(/^@/, "") || (m?.id?.match(/^@[^@]+@(.+)$/) || [])[1] || "";
+        return d && d !== localDomain;
+      });
+      if (outsider) {
+        return { activity, error: "Groups are open to this server's own members only for now." };
+      }
+    }
 
     // Nobody from a defederated server goes in a circle -- that would start
     // pulling from it -- except a person's own Blocked/Muted circles and the

@@ -52,31 +52,25 @@ export default async function Join(activity, ctx = {}) {
     const actorId = activity.actorId;
     const targetId = activity.target;
 
+    // GROUPS ARE SERVER-ONLY FOR NOW (beta, 2026-11-24). Cross-server
+    // membership is broken (remote groups get hydrated locally, group posts
+    // never reach remote members, approvals fail...), so only this server's
+    // own members can join this server's own groups. Decided by the ids'
+    // domains, NOT by whether a Group doc exists here -- remote groups can
+    // be cached locally. Undo this (and the matching check in
+    // routes/inbox/post.js) once cross-server groups are rebuilt.
+    const groupDomain = kowloonId(targetId).domain;
+    if (!groupDomain || !isLocalDomain(groupDomain)) {
+      return { activity, error: "Join: groups on other servers can't be joined yet" };
+    }
+    const actorDomain = kowloonId(actorId).domain;
+    if (!actorDomain || !isLocalDomain(actorDomain)) {
+      return { activity, error: "Join: only members of this server can join its groups" };
+    }
+
     // Resolve target: Group only (Events are now Posts)
     const target = await Group.findOne({ id: targetId }).lean();
-
-    if (!target) {
-      // Remote group: federate the Join activity to the group's home server
-      const parsed = kowloonId(targetId);
-      if (parsed.domain && !isLocalDomain(parsed.domain)) {
-        // Track remote group membership locally so we can fan-out posts later
-        try {
-          const u = await User.findOne({ id: actorId }).lean();
-          if (u?.circles?.groups) {
-            await Circle.updateOne(
-              { id: u.circles.groups, "members.id": { $ne: targetId } },
-              { $push: { members: { id: targetId } }, $inc: { memberCount: 1 } }
-            );
-          }
-        } catch (_) { /* non-fatal */ }
-        return {
-          activity,
-          result: { status: "federated" },
-          federation: { shouldFederate: true, scope: "domain", domains: [parsed.domain] },
-        };
-      }
-      return { activity, error: "Join: Group not found" };
-    }
+    if (!target) return { activity, error: "Join: Group not found" };
 
     // Blocked check
     if (target.circles?.blocked) {

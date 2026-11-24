@@ -183,6 +183,24 @@ export default route(
       typeof body.to === "string" &&
       body.to.startsWith("group:") &&
       domainOf(body.to) === ownDomain;
+
+    // GROUPS ARE SERVER-ONLY FOR NOW (beta, 2026-11-24). Cross-server group
+    // membership is broken in several places (see the Join handler), so no
+    // other server may join our groups, post into them, or add our people to
+    // theirs. Leave still passes so anyone already in can get out.
+    const groupAddressed =
+      (typeof body.to === "string" && body.to.startsWith("group:")) ||
+      (typeof body.target === "string" && body.target.startsWith("group:"));
+    if (body.type !== "Leave" && (body.type === "Join" || toLocalGroup || groupAddressed)) {
+      log.info("Group activity refused: groups are server-only", {
+        actorDomain,
+        type: body.type,
+      });
+      setStatus(403);
+      set({ error: "Groups on this server are open to its own members only" });
+      return;
+    }
+
     if (
       ((await isServerBlocked(signerDomain)) || (await isServerBlocked(actorDomain))) &&
       (INTERACTION_TYPES.has(body.type) || toLocalGroup)
