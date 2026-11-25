@@ -53,9 +53,18 @@ see **Before you upgrade**.
 - Report people, replies and groups, not just posts.
 - Change your email address (with your password).
 - Location data is stripped from iPhone photos and from audio and video.
+- Groups work within their own server for now: people can join groups on
+  their own server only, and group posts stay there. Joining groups on
+  other servers will come back once it works properly.
+- Photos keep their shape in the feed, cropped around the important part.
 
 ### Fixes
 
+- Privacy: adding someone from another server to one of your circles sent
+  a message to their server. It no longer does; circles never leave your
+  server.
+- "Send the link again" for email confirmation works even when the server
+  doesn't require confirmation.
 - The setup wizard installed an image name we no longer publish.
 - Security fixes in third-party packages (follow-redirects, Sentry,
   nodemailer in the setup wizard).
